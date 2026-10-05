@@ -212,6 +212,12 @@ class MediaScreen(ModalScreen[None]):
             self.notify(M.play(self.paths[-1], self.app_.cfg["images"]["video_player"]))
 
     async def action_next(self) -> None:
+        try:
+            await self._next()
+        except Exception as e:  # noqa: BLE001 - never crash the app from the viewer
+            self.notify(f"Couldn't advance: {e}", severity="warning")
+
+    async def _next(self) -> None:
         if self.index + 1 < len(self.items):
             self.index += 1
             await self.show()
@@ -227,7 +233,10 @@ class MediaScreen(ModalScreen[None]):
 
     async def action_close(self) -> None:
         if self.viewer and self.app_.bridge:
-            await self.app_.bridge.close_viewer()
+            try:
+                await self.app_.bridge.close_viewer()
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"Couldn't close the viewer in the page: {e}", severity="warning")
         self.dismiss(None)
 
 
@@ -337,7 +346,7 @@ class GhostctlApp(App[int]):
 
     # --- connection ---
 
-    @work(exclusive=True, group="connect")
+    @work(exclusive=True, group="connect", exit_on_error=False)
     async def connect(self) -> None:
         self.status("Starting browser...")
         try:
@@ -364,6 +373,14 @@ class GhostctlApp(App[int]):
             self.status(str(e), error=True)
             return
         self.ready_status()
+
+    def on_worker_state_changed(self, event) -> None:
+        """Background tasks never crash the app; their errors go to the status bar."""
+        from textual.worker import WorkerState
+
+        if event.state is WorkerState.ERROR and event.worker.error is not None:
+            err = event.worker.error
+            self.status(f"{type(err).__name__}: {str(err).splitlines()[0]}", error=True)
 
     def on_bridge_event(self, region: str, data: object) -> None:
         if region == "feed":
@@ -522,7 +539,7 @@ class GhostctlApp(App[int]):
             self.ready_status()
             return result
 
-        return self.run_worker(run(), group=group)
+        return self.run_worker(run(), group=group, exit_on_error=False)
 
     # --- navigation actions ---
 
@@ -565,7 +582,7 @@ class GhostctlApp(App[int]):
     def message_selected(self) -> None:
         self.action_menu()
 
-    @work(exclusive=True, group="open")
+    @work(exclusive=True, group="open", exit_on_error=False)
     async def open_chat(self, chat: Chat) -> None:
         if not self.bridge:
             return
@@ -719,7 +736,7 @@ class GhostctlApp(App[int]):
 
     # --- message menu ---
 
-    @work(group="menu")
+    @work(group="menu", exit_on_error=False)
     async def action_menu(self) -> None:
         m = self.selected_message()
         if not m or not self.bridge:
@@ -739,19 +756,19 @@ class GhostctlApp(App[int]):
         state = "saved" if self.saved.get(m.key) else "not saved"
         choice = await self.push_screen_wait(MenuScreen(f"{m.sender}: {(m.text or 'media')[:40]}  ({state})", options))
         if choice is None:
-            await self.bridge.close_menu()
+            await self._safe(self.bridge.close_menu())
             return
         if choice == "Copy Text":
-            await self.bridge.close_menu()
+            await self._safe(self.bridge.close_menu())
             self.copy_to_clipboard(m.text)
             self.notify("Copied (via your terminal's clipboard support)")
             return
         if choice == "Reply":
-            await self.bridge.close_menu()
+            await self._safe(self.bridge.close_menu())
             self.action_reply()
             return
         if choice == "Delete":
-            await self.bridge.close_menu()
+            await self._safe(self.bridge.close_menu())
             if not await self.push_screen_wait(ConfirmScreen("Delete this message for everyone?")):
                 return
             try:
@@ -772,6 +789,12 @@ class GhostctlApp(App[int]):
             self.render_conv()
         self.notify(options[[o[0] for o in options].index(choice)][1])
 
+    async def _safe(self, coro) -> None:
+        try:
+            await coro
+        except Exception as e:  # noqa: BLE001
+            self.fail(e)
+
     # --- media and snaps ---
 
     def _dump_dir(self) -> Path | None:
@@ -780,7 +803,7 @@ class GhostctlApp(App[int]):
             return DEBUG_DIR
         return None
 
-    @work(group="media")
+    @work(group="media", exit_on_error=False)
     async def action_open_media(self) -> None:
         m = self.selected_message()
         if not m or not self.bridge:
@@ -816,15 +839,15 @@ class GhostctlApp(App[int]):
             return
         self.ready_status()
 
-    @work(group="media")
+    @work(group="media", exit_on_error=False)
     async def action_stories(self) -> None:
         if not self.bridge:
             return
-        if self.open_id:
-            self.open_id = None
-            await self.bridge.close_chat()
-            self.query_one("#chats").focus()
         try:
+            if self.open_id:
+                self.open_id = None
+                await self.bridge.close_chat()
+                self.query_one("#chats").focus()
             label = await self.bridge.stories_available()
             if "no stories" in label.lower():
                 self.notify("No stories to view right now.")
@@ -837,7 +860,7 @@ class GhostctlApp(App[int]):
             return
         self.ready_status()
 
-    @work(group="media")
+    @work(group="media", exit_on_error=False)
     async def action_send_file(self) -> None:
         if not self._need_chat():
             return
@@ -845,7 +868,7 @@ class GhostctlApp(App[int]):
         if path:
             self.confirm_send_file(path)
 
-    @work(group="media")
+    @work(group="media", exit_on_error=False)
     async def confirm_send_file(self, path: Path) -> None:
         if not self._need_chat():
             return

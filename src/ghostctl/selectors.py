@@ -155,6 +155,10 @@ UPLOAD_INPUT = Sel("upload_input", "input[type='file'][name='uploadImages']")
 
 # --- Message context menu (right-click on a message; verified 2026-10-05) ---
 
+# Full-viewport backdrop the menu (and other pop-ups) render into. While it has
+# children it swallows every click; a real click on it closes the pop-up.
+OVERLAY = Sel("overlay", "#portal-container > *")
+
 # Reaction choices at the top of the menu: <img alt="Reaction love from <you>">.
 # Names seen: love, laugh, fire, thumbs-up, thumbs-down, cry, shock, question mark.
 MENU_REACTION = Sel("menu_reaction", "img[alt^='Reaction ']")

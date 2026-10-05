@@ -424,11 +424,13 @@ class Bridge:
 
     # --- pacing ---
 
-    async def _pace(self) -> None:
+    async def _pace(self, clear: bool = True) -> None:
         gap = time.monotonic() - self._last_action
         if gap < self.action_gap:
             await asyncio.sleep(self.action_gap - gap)
         self._last_action = time.monotonic()
+        if clear:
+            await self._clear_overlay()
 
     async def _target(self, key: str) -> None:
         if not await self._call("target", key):
@@ -506,6 +508,7 @@ class Bridge:
         return box
 
     async def _set_composer(self, text: str) -> None:
+        await self._clear_overlay()
         box = await self._composer()
         await box.click()
         await self.page.keyboard.press("Control+A")
@@ -544,9 +547,6 @@ class Bridge:
         The menu stays open until choose_menu() or close_menu()."""
         async with self._lock:
             await self._pace()
-            if await self._menu_open():
-                await self.page.mouse.click(4, 4)
-                await asyncio.sleep(0.3)
             await self._target(key)
             await self.page.locator(f"{TARGET} > div").first.click(button="right")
             await asyncio.sleep(0.6)
@@ -563,13 +563,14 @@ class Bridge:
                         items.append(label)
                         break
         if not items and not reactions:
+            await self.close_menu()
             raise SelectorError("message menu", "reading the right-click menu")
         # de-duplicate reactions (one per kind)
         return [f"react:{r}" for r in dict.fromkeys(reactions)] + items
 
     async def choose_menu(self, entry: str) -> None:
         async with self._lock:
-            await self._pace()
+            await self._pace(clear=False)
             if entry.startswith("react:"):
                 name = entry.split(":", 1)[1]
                 loc = self.page.locator(f"img[alt^='Reaction {name} from ']")
@@ -578,7 +579,11 @@ class Bridge:
             for i in range(await loc.count()):
                 if await loc.nth(i).is_visible():
                     await loc.nth(i).click()
+                    if entry != "Delete":  # Delete may open a confirm dialog
+                        await asyncio.sleep(0.4)
+                        await self._clear_overlay()
                     return
+            await self._clear_overlay()
         raise ActionError(f"Menu entry '{entry}' disappeared (the menu closed). Try again.")
 
     async def choose_menu_confirm(self, label: str) -> None:
@@ -590,23 +595,25 @@ class Bridge:
                     await btn.nth(i).click()
                     return
 
-    async def _menu_open(self) -> bool:
-        for label in S.MENU_ITEMS:
-            loc = self.page.get_by_text(label, exact=True)
-            for i in range(await loc.count()):
-                if await loc.nth(i).is_visible():
-                    return True
-        return False
+    async def _overlay_open(self) -> bool:
+        return await self.page.evaluate(
+            "sel => [...document.querySelectorAll(sel)].some(e => {"
+            " const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })",
+            S.OVERLAY.css,
+        )
+
+    async def _clear_overlay(self) -> None:
+        """Close a leftover menu/pop-up: Escape doesn't, a click on its backdrop does.
+        The backdrop covers the whole viewport, so the corner click lands on it."""
+        for _ in range(3):
+            if not await self._overlay_open():
+                return
+            await self.page.mouse.click(4, 4)
+            await asyncio.sleep(0.3)
 
     async def close_menu(self) -> None:
-        """Escape doesn't close Snapchat's menu; clicking outside it does."""
         async with self._lock:
-            await self.page.keyboard.press("Escape")
-            for _ in range(3):
-                await asyncio.sleep(0.3)
-                if not await self._menu_open():
-                    return
-                await self.page.mouse.click(4, 4)
+            await self._clear_overlay()
 
     async def reply(self, key: str, text: str) -> None:
         await self.open_menu(key)
@@ -675,7 +682,7 @@ class Bridge:
     async def viewer_next(self) -> Media | None:
         """Advance the snap/story viewer (click it). None when the viewer closed."""
         async with self._lock:
-            await self._pace()
+            await self._pace(clear=False)  # the viewer itself may be a pop-up
             loc = self.page.locator(VIEWER).first
             if not await loc.count():
                 return None
