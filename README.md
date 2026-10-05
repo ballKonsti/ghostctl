@@ -69,7 +69,7 @@ Press `?` in the app for the list. All keys can be rebound in the config.
 | `r` | reply to the selected message |
 | `e` | message menu: react (love, laugh, fire, 👍, 👎, cry, shock, ?), save/unsave, reply, copy, delete |
 | `o` | open the selected snap or photo/video |
-| `c` | live snap: webcam preview, photo (`space`) or video (`v`), lenses (`←/→`), caption, Send To |
+| `c` | live snap: webcam preview, take it (`space`), lenses (`←/→`), caption, Send To, `esc` retake |
 | `a` | send an image (file picker) |
 | `/` | search chats |
 | `m` | mark the selected chat as read |
@@ -86,8 +86,8 @@ In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play video, `esc` clo
   sender. ghostctl only opens one when you press `o`, and asks first (turn the
   prompt off with `confirm_snap_open = false`). Opening a chat never opens its snaps.
 - **Snaps (sending):** the web client sends snaps from the webcam only. `c` opens
-  Snapchat's real camera with a live preview in the terminal; take a photo or
-  video, add a caption, pick recipients (the open chat is preselected; My Story
+  Snapchat's real camera with a live preview in the terminal; take a photo
+  (the web camera can't record video snaps), add a caption, pick recipients (the open chat is preselected; My Story
   and groups are listed too) and send. ghostctl doesn't fake a webcam, so a snap
   can't come from a file; send images **in chat** instead (`a` or `/send`).
 - **Chat media upload:** png, jpeg and gif only. No video.

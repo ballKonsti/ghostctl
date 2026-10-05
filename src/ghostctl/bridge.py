@@ -878,7 +878,8 @@ class Bridge:
         raise SelectorError(S.PREVIEW, "waiting for the snap preview")
 
     async def capture_photo(self) -> None:
-        """Tap the shutter: a quick press and release (a click registers as a swipe)."""
+        """Tap the shutter. It only has an onClick handler: the web camera takes
+        photos, no video. (A Playwright .click() on it lands on the lens carousel.)"""
         async with self._lock:
             x, y = await self._shutter_center()
             await self.page.mouse.move(x, y)
@@ -886,17 +887,6 @@ class Bridge:
             await asyncio.sleep(0.15)
             await self.page.mouse.up()
             await self._wait_preview()
-
-    async def start_recording(self) -> None:
-        async with self._lock:
-            x, y = await self._shutter_center()
-            await self.page.mouse.move(x, y)
-            await self.page.mouse.down()
-
-    async def stop_recording(self) -> None:
-        async with self._lock:
-            await self.page.mouse.up()
-            await self._wait_preview(timeout=30)
 
     async def preview_media(self) -> Media:
         async with self._lock:

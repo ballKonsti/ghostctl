@@ -64,7 +64,7 @@ ACTIONS = {
     "reply": ("reply", "reply to the selected message"),
     "menu": ("menu", "react / save / copy / delete the selected message"),
     "open_media": ("open_media", "open snap or media (snaps: marks it viewed)"),
-    "camera": ("camera", "take a live snap with your webcam"),
+    "camera": ("camera", "take a live photo snap with your webcam"),
     "send_file": ("send_file", "send an image from a file"),
     "search": ("search", "search chats"),
     "mark_read": ("mark_read", "mark the selected chat as read"),
@@ -198,7 +198,7 @@ class HelpScreen(ModalScreen[None]):
         t.append("\n  Snap viewer  ", style="bold")
         t.append("n next · 1-8 react · p play video · esc close\n", style=DIM)
         t.append("  Camera       ", style="bold")
-        t.append("space photo · v record · ←/→ lens · esc close\n", style=DIM)
+        t.append("space take snap · ←/→ lens · enter send to · esc retake/close\n", style=DIM)
         t.append(f"\n  Config: {self.config_path}\n", style=DIM)
         t.append("  `ghostctl config --edit` to change keys, colours, behaviour. ctrl+p: themes.", style=DIM)
         yield VerticalScroll(Static(t), classes="dialog")
@@ -491,27 +491,27 @@ class CameraScreen(ModalScreen[None]):
     """Live webcam preview, capture, caption and send — through Snapchat's camera."""
 
     BINDINGS = [
-        Binding("escape", "close", "close"),
+        Binding("escape", "back", "back"),
         Binding("space", "shutter", "photo"),
-        Binding("v", "record", "record"),
+        Binding("v", "record", "video", show=False),
         Binding("left,h", "lens(-1)", "lens"),
         Binding("right,l", "lens(1)", "lens", show=False),
-        Binding("x", "discard", "retake"),
         Binding("enter", "send_to", "send to", priority=True),
     ]
 
     def __init__(self, app_: GhostctlApp, chat_name: str) -> None:
         super().__init__()
         self.app_, self.chat_name = app_, chat_name
-        self.state = "starting"  # starting | live | recording | capturing | preview | sending | closing
-        self.rec_started = 0.0
+        self.state = "starting"  # starting | live | capturing | preview | sending | closing
         self._loop: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="viewer"):
             yield Static("", id="viewer-top")
             yield Picture(self.app_.cfg["images"]["protocol"], id="cam-pic")
-            yield Input(placeholder="Add a caption (optional) — enter to choose recipients", id="caption")
+            caption = Input(placeholder="Add a caption (optional) — enter to choose recipients", id="caption")
+            caption.display = caption.can_focus = False
+            yield caption
             yield Static("", id="viewer-bottom")
 
     @property
@@ -520,11 +520,7 @@ class CameraScreen(ModalScreen[None]):
 
     def hud(self) -> None:
         top = Text()
-        if self.state == "recording":
-            secs = int(time.monotonic() - self.rec_started)
-            top.append(" ● REC ", style=f"bold white on {SNAP_RED}")
-            top.append(f" {secs}s", style=f"bold {SNAP_RED}")
-        elif self.state == "preview":
+        if self.state == "preview":
             top.append(" ■ Snap ready ", style=f"bold black on {YELLOW}")
         elif self.state in ("starting", "capturing", "sending"):
             top.append(f" ◌ {self.state}… ", style=DIM)
@@ -533,16 +529,20 @@ class CameraScreen(ModalScreen[None]):
         top.append(f"  to {self.chat_name}", style="bold")
         self.query_one("#viewer-top", Static).update(top)
         keys = {
-            "live": [("space", "photo"), ("v", "record video"), ("←/→", "lens"), ("esc", "close")],
-            "recording": [("v", "stop"), ("esc", "cancel")],
-            "preview": [("enter", "send to…"), ("x", "retake"), ("esc", "close")],
+            "live": [("space", "take snap"), ("←/→", "lens"), ("esc", "close")],
+            "preview": [("type", "caption"), ("enter", "send to…"), ("esc", "retake")],
         }.get(self.state, [("esc", "close")])
         bottom = Text(" ")
         for k, label in keys:
             bottom.append(f" {k} ", style=f"bold {YELLOW}")
             bottom.append(f"{label}  ", style=DIM)
         self.query_one("#viewer-bottom", Static).update(bottom)
-        self.query_one("#caption").display = self.state == "preview"
+        # The caption box only exists in the preview. While live it must not hold
+        # focus, or space/v get typed into it instead of taking the snap.
+        caption = self.query_one("#caption", Input)
+        caption.display = caption.can_focus = self.state == "preview"
+        if self.state != "preview" and self.focused is caption:
+            self.set_focus(None)
 
     async def on_mount(self) -> None:
         self.hud()
@@ -558,17 +558,13 @@ class CameraScreen(ModalScreen[None]):
 
     async def live_loop(self) -> None:
         pic = self.query_one("#cam-pic", Picture)
-        while self.state in ("live", "recording"):
+        while self.state == "live":
             data = await self.bridge.camera_frame()
-            if data and self.state in ("live", "recording"):
+            if data and self.state == "live":
                 try:
                     await pic.show(PILImage.open(io.BytesIO(data)))
                 except Exception:  # noqa: BLE001 - skip a bad frame
                     pass
-            if self.state == "recording":
-                self.hud()
-                if time.monotonic() - self.rec_started > 60:
-                    await self.action_record()
             await asyncio.sleep(0.08)
 
     def _restart_live(self) -> None:
@@ -601,22 +597,11 @@ class CameraScreen(ModalScreen[None]):
             return
         await self._show_preview()
 
-    async def action_record(self) -> None:
-        if self.state == "live":
-            await self.bridge.start_recording()
-            self.state = "recording"
-            self.rec_started = time.monotonic()
-            self.hud()
-        elif self.state == "recording":
-            self.state = "capturing"
-            self.hud()
-            try:
-                await self.bridge.stop_recording()
-            except Exception as e:  # noqa: BLE001
-                self.notify(str(e), severity="error")
-                self._restart_live()
-                return
-            await self._show_preview()
+    def action_record(self) -> None:
+        # The web camera's shutter only handles clicks (checked 2026-10-05):
+        # Snapchat Web takes photo snaps; video snaps need the phone app.
+        self.notify("Snapchat Web can only take photo snaps — video snaps need the phone app.",
+                    severity="warning")
 
     async def action_lens(self, step: int) -> None:
         if self.state == "live":
@@ -625,10 +610,15 @@ class CameraScreen(ModalScreen[None]):
             except Exception as e:  # noqa: BLE001
                 self.notify(str(e), severity="warning")
 
+    async def action_back(self) -> None:
+        """esc: in the preview, throw the snap away and go back to the camera;
+        otherwise close the camera."""
+        if self.state == "preview":
+            await self.action_discard()
+        else:
+            await self.action_close()
+
     async def action_discard(self) -> None:
-        if self.focused and self.focused.id == "caption":
-            self.query_one("#caption", Input).insert_text_at_cursor("x")
-            return
         if self.state != "preview":
             return
         await self.bridge.discard_preview()
