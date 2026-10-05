@@ -249,22 +249,74 @@ _PAGE_JS = r"""
     return true;
   }
 
-  // Find the snap/story viewer: the largest visible img/video/canvas outside the
-  // chat list and message list. Tags it and returns a description.
+  // Find the snap/story viewer media and tag it. Prefers the "media content"
+  // region; falls back to the largest image/video outside the chat panes.
   function findViewer() {
     document.querySelectorAll('[data-ghostctl-viewer]').forEach(e => e.removeAttribute('data-ghostctl-viewer'));
-    const vw = innerWidth, vh = innerHeight;
-    let best = null, bestArea = 0;
-    for (const el of document.querySelectorAll('img, video, canvas')) {
-      if (el.closest(SEL.feed) || el.closest(SEL.conv_list)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 120 || r.height < 120 || r.bottom < 0 || r.top > vh) continue;
-      const area = r.width * r.height;
-      if (area > bestArea && area > 0.12 * vw * vh) { best = el; bestArea = area; }
+    let best = [...document.querySelectorAll(SEL.viewer_media)].find(e => e.getBoundingClientRect().width > 0);
+    let exact = !!best;
+    if (!best) {
+      const vw = innerWidth, vh = innerHeight;
+      let bestArea = 0;
+      for (const el of document.querySelectorAll('img, video, canvas')) {
+        if (el.closest(SEL.feed) || el.closest(SEL.conv_list) || el.alt === '') continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 120 || r.height < 120 || r.bottom < 0 || r.top > vh) continue;
+        const area = r.width * r.height;
+        if (area > bestArea && area > 0.12 * vw * vh) { best = el; bestArea = area; }
+      }
     }
     if (!best) return null;
     best.setAttribute('data-ghostctl-viewer', '1');
-    return {tag: best.tagName.toLowerCase(), src: best.currentSrc || best.src || ''};
+    // Sender name and time shown above the media.
+    let sender = '', time = null;
+    for (let e = best.closest('[aria-label="media content"]') || best; e && e !== document.body; e = e.parentElement) {
+      const t = e.querySelector('time[datetime]');
+      if (t && !t.closest(SEL.feed) && !t.closest(SEL.conv_list)) {
+        time = t.getAttribute('datetime');
+        let row = t.parentElement;
+        while (row && row.parentElement && !raw(row.parentElement).replace(raw(row), '').trim()) row = row.parentElement;
+        sender = row && row.parentElement ? raw(row.parentElement).replace(raw(row), '').trim() : '';
+        break;
+      }
+    }
+    return {tag: best.tagName.toLowerCase(), src: best.currentSrc || best.src || '', exact, sender, time};
+  }
+
+  // Current camera frame (or any video/img/canvas) as a JPEG data URL, scaled to maxW.
+  function frame(sel, maxW) {
+    const v = document.querySelector(sel);
+    if (!v) return null;
+    const w0 = v.videoWidth || v.naturalWidth || v.width, h0 = v.videoHeight || v.naturalHeight || v.height;
+    if (!w0 || !h0) return null;
+    const scale = Math.min(1, maxW / w0);
+    const c = document.createElement('canvas');
+    c.width = Math.round(w0 * scale); c.height = Math.round(h0 * scale);
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.8);
+  }
+
+  // Recipients in the "Send To" picker. Tags each li with data-ghostctl-rcpt.
+  function readRecipients(mark) {
+    const form = document.querySelector(SEL.sendto_form);
+    if (!form) return null;
+    const out = [];
+    let section = '', idx = 0;
+    const walker = document.createTreeWalker(form, NodeFilter.SHOW_ELEMENT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (n.tagName === 'H2') { section = raw(n); continue; }
+      if (n.tagName !== 'LI' || n.querySelector('h2') || n.querySelector('li')) continue;
+      const texts = [];
+      const tw = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+      for (let t = tw.nextNode(); t; t = tw.nextNode()) { const x = t.textContent.trim(); if (x) texts.push(x); }
+      if (!texts.length) continue;
+      n.setAttribute('data-ghostctl-rcpt', String(idx));
+      out.push({idx: idx++, section, name: texts[0], extra: texts.slice(1).join(' '),
+                // Every row has the checkmark; only selected rows show it.
+                selected: [...n.querySelectorAll(`img[alt="${mark}"], [aria-label="${mark}"]`)]
+                  .some(m => getComputedStyle(m).visibility === 'visible')});
+    }
+    return out;
   }
 
   async function fetchSrc(src) {
@@ -312,7 +364,7 @@ _PAGE_JS = r"""
   });
   obs.observe(document.body, {childList: true, subtree: true, characterData: true});
 
-  window.__ghostctl = {ok: true, readFeed, readConversation, target, findViewer, fetchSrc, targetMedia};
+  window.__ghostctl = {ok: true, readFeed, readConversation, target, findViewer, fetchSrc, targetMedia, frame, readRecipients};
   return true;
 }
 """
@@ -525,19 +577,36 @@ class Bridge:
             await self._set_composer(text)
 
     async def send_text(self, text: str) -> None:
+        """Type into the composer, check Snapchat registered it, press Enter, and
+        confirm the composer cleared. Retries once."""
         text = text.strip()
         if not text:
             return
+
+        def norm(x: str) -> str:
+            return " ".join(x.split())
+
         async with self._lock:
             await self._pace()
-            await self._set_composer(text)
-            await self.page.keyboard.press("Enter")
-            box = await self._composer()
-            for _ in range(20):  # wait for the composer to clear = sent
-                if not (await box.inner_text()).strip():
-                    return
-                await asyncio.sleep(0.25)
-        raise ActionError("Message may not have been sent (the message box did not clear).")
+            for _attempt in range(2):
+                await self._set_composer(text)
+                box = await self._composer()
+                for _ in range(20):  # wait until the page state has the text
+                    if norm(await box.inner_text()) == norm(text):
+                        break
+                    await asyncio.sleep(0.05)
+                else:  # insert_text didn't register: type it with real key events
+                    await box.click()
+                    await self.page.keyboard.press("Control+A")
+                    await self.page.keyboard.press("Backspace")
+                    await box.press_sequentially(text.replace("\n", " "), delay=8)
+                await asyncio.sleep(0.15)
+                await self.page.keyboard.press("Enter")
+                for _ in range(24):  # composer clears once Snapchat accepted it
+                    await asyncio.sleep(0.25)
+                    if not norm(await box.inner_text()):
+                        return
+        raise ActionError("Message not sent: Snapchat didn't accept it (the message box did not clear).")
 
     # --- message menu (right-click) ---
 
@@ -647,24 +716,24 @@ class Bridge:
                 for i, m in enumerate(found)
             ]
 
-    async def _capture_viewer(self, timeout: float = 10.0) -> Media | None:
+    async def _capture_viewer(self, timeout: float = 10.0) -> tuple[Media, dict] | None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
             v = await self._call("findViewer")
-            if v:
-                if v["tag"] == "video":
-                    await asyncio.sleep(0.3)
-                    return await self._fetch(v["src"], "video", VIEWER)
-                if v["tag"] == "img" and v["src"]:
-                    return await self._fetch(v["src"], "image", VIEWER)
-                png = await self.page.locator(VIEWER).first.screenshot()
-                return Media("image", png, "image/png")
-            await asyncio.sleep(0.4)
+            if v and (v["src"] or v["tag"] != "img"):
+                await asyncio.sleep(0.3 if v["tag"] == "video" else 0)
+                if v["src"] and not v["src"].startswith("data:"):
+                    media = await self._fetch(v["src"], "video" if v["tag"] == "video" else "image", VIEWER)
+                else:
+                    media = Media("image", await self.page.locator(VIEWER).first.screenshot(), "image/png")
+                return media, v
+            await asyncio.sleep(0.3)
         return None
 
-    async def open_snap(self, key: str, dump_dir: Path | None = None) -> Media:
-        """Open an unopened snap. This marks it as viewed for the sender."""
+    async def open_snap(self, key: str, dump_dir: Path | None = None) -> tuple[Media, dict]:
+        """Open an unopened snap. This marks it as viewed for the sender.
+        Returns the media and viewer info (sender, time)."""
         async with self._lock:
             await self._pace()
             await self._target(key)
@@ -672,35 +741,55 @@ class Bridge:
             if not await btn.count():
                 raise ActionError("That message isn't an unopened snap.")
             await btn.click()
-            media = await self._capture_viewer()
+            got = await self._capture_viewer()
             if dump_dir is not None:
                 await self._dump(dump_dir, "snap-viewer")
-        if media is None:
-            raise SelectorError("snap viewer", "waiting for the snap to appear (no large image/video found)")
-        return media
+        if got is None:
+            raise SelectorError(S.VIEWER_MEDIA, "waiting for the snap to appear")
+        return got
 
-    async def viewer_next(self) -> Media | None:
-        """Advance the snap/story viewer (click it). None when the viewer closed."""
+    async def viewer_next(self) -> tuple[Media, dict] | None:
+        """Advance the snap/story viewer. None when there is nothing after this one."""
         async with self._lock:
-            await self._pace(clear=False)  # the viewer itself may be a pop-up
-            loc = self.page.locator(VIEWER).first
-            if not await loc.count():
+            await self._pace(clear=False)  # the viewer itself is a pop-up
+            old = await self.page.evaluate(
+                "s => { const e = document.querySelector(s); return e && (e.currentSrc || e.src); }", VIEWER)
+            adv = self.page.locator(S.VIEWER_ADVANCE.css).first
+            if not await adv.count():
                 return None
-            old = await self.page.evaluate("s => { const e = document.querySelector(s); return e && (e.currentSrc || e.src); }", VIEWER)
-            await loc.click()
-            await asyncio.sleep(1.0)
-            v = await self._call("findViewer")
-            if not v or v["src"] == old:
-                return None
-            return await self._capture_viewer(timeout=3)
+            await adv.click()
+            for _ in range(10):
+                await asyncio.sleep(0.4)
+                v = await self._call("findViewer")
+                if not v:
+                    return None
+                if v["src"] and v["src"] != old:
+                    return await self._capture_viewer(timeout=3)
+            return None
+
+    async def viewer_react(self, name: str) -> None:
+        """React to the open snap/story via the viewer's reaction bar."""
+        async with self._lock:
+            await self._pace(clear=False)
+            loc = self.page.locator(f"img[alt^='Reaction {name} from ']")
+            for i in range(await loc.count()):
+                if await loc.nth(i).is_visible():
+                    await loc.nth(i).click()
+                    return
+        raise ActionError("This snap has no reaction bar.")
 
     async def close_viewer(self) -> None:
         async with self._lock:
             for _ in range(3):
                 if not await self._call("findViewer"):
                     return
-                await self.page.keyboard.press("Escape")
+                close = self.page.locator(S.VIEWER_CLOSE.css).first
+                if await close.count() and await close.is_visible():
+                    await close.click()
+                else:
+                    await self.page.keyboard.press("Escape")
                 await asyncio.sleep(0.6)
+            await self._clear_overlay()
 
     async def stories_available(self) -> str:
         """Text of the stories tile, e.g. "No Stories". Needs no chat open."""
@@ -709,16 +798,193 @@ class Bridge:
             raise SelectorError(S.STORIES, "finding the stories tile (close the chat first)")
         return " ".join((await loc.text_content() or "").split())
 
-    async def open_stories(self, dump_dir: Path | None = None) -> Media:
+    async def open_stories(self, dump_dir: Path | None = None) -> tuple[Media, dict]:
         async with self._lock:
             await self._pace()
             await self.page.locator(S.STORIES.css).first.click()
-            media = await self._capture_viewer()
+            got = await self._capture_viewer()
             if dump_dir is not None:
                 await self._dump(dump_dir, "story-viewer")
-        if media is None:
-            raise SelectorError("story viewer", "waiting for the story to appear")
-        return media
+        if got is None:
+            raise SelectorError(S.VIEWER_MEDIA, "waiting for the story to appear")
+        return got
+
+    # --- camera (live snaps) ---
+
+    async def open_camera(self) -> None:
+        """Open Snapchat's camera for the open chat and wait for the live feed."""
+        async with self._lock:
+            await self._pace()
+            await self.page.context.grant_permissions(["camera", "microphone"], origin="https://www.snapchat.com")
+            btn = self.page.locator(S.CAMERA_BUTTON.css).first
+            if not await btn.count():
+                raise SelectorError(S.CAMERA_BUTTON, "opening the camera")
+            await btn.click()
+            got = self.page.locator(S.CAMERA_GOT_IT.css)
+            for _ in range(10):
+                await asyncio.sleep(0.3)
+                if await got.count() and await got.first.is_visible():
+                    await got.first.click()
+                    break
+                if await self._camera_live():
+                    break
+            for _ in range(50):
+                if await self._camera_live():
+                    return
+                await asyncio.sleep(0.3)
+        raise ActionError("The camera didn't start. Is the webcam in use by another app?")
+
+    async def _camera_live(self) -> bool:
+        return await self.page.evaluate(
+            "s => { const v = document.querySelector(s); return !!(v && v.videoWidth > 0); }", S.CAMERA_VIDEO.css)
+
+    async def camera_frame(self, max_width: int = 540) -> bytes | None:
+        """Current camera frame as JPEG (no lock: read-only and frequent)."""
+        try:
+            url = await self._call("frame", S.CAMERA_VIDEO.css, max_width)
+        except PlaywrightError:
+            return None
+        return base64.b64decode(url.split(",", 1)[1]) if url else None
+
+    async def camera_lens(self, step: int) -> None:
+        async with self._lock:
+            sel = S.CAMERA_LENS_NEXT if step > 0 else S.CAMERA_LENS_PREV
+            btn = self.page.locator(sel.css).first
+            if not await btn.count():
+                # Arrows only appear after the first lens change: click the neighbour lens.
+                lens = self.page.locator(S.CAMERA_LENS.css)
+                if step > 0 and await lens.count():
+                    await lens.first.click()
+                return
+            await btn.click()
+
+    async def _shutter_center(self) -> tuple[float, float]:
+        ring = self.page.locator(S.CAMERA_SHUTTER.css).first
+        if not await ring.count():
+            raise SelectorError(S.CAMERA_SHUTTER, "finding the shutter")
+        box = await ring.bounding_box()
+        return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    async def _wait_preview(self, timeout: float = 15.0) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if await self.page.locator(S.PREVIEW_MEDIA.css).count():
+                return
+            await asyncio.sleep(0.25)
+        raise SelectorError(S.PREVIEW, "waiting for the snap preview")
+
+    async def capture_photo(self) -> None:
+        """Tap the shutter: a quick press and release (a click registers as a swipe)."""
+        async with self._lock:
+            x, y = await self._shutter_center()
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.down()
+            await asyncio.sleep(0.15)
+            await self.page.mouse.up()
+            await self._wait_preview()
+
+    async def start_recording(self) -> None:
+        async with self._lock:
+            x, y = await self._shutter_center()
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.down()
+
+    async def stop_recording(self) -> None:
+        async with self._lock:
+            await self.page.mouse.up()
+            await self._wait_preview(timeout=30)
+
+    async def preview_media(self) -> Media:
+        async with self._lock:
+            info = await self.page.evaluate(
+                "s => { const e = document.querySelector(s); return e && {tag: e.tagName.toLowerCase(), src: e.currentSrc || e.src}; }",
+                S.PREVIEW_MEDIA.css)
+            if not info:
+                raise SelectorError(S.PREVIEW_MEDIA, "reading the snap preview")
+            kind = "video" if info["tag"] == "video" else "image"
+            return await self._fetch(info["src"], kind, S.PREVIEW_MEDIA.css)
+
+    async def set_caption(self, text: str) -> None:
+        async with self._lock:
+            box = self.page.locator(S.PREVIEW_CAPTION.css).first
+            if not await box.is_visible():
+                await self.page.locator(S.PREVIEW_CAPTION_BUTTON.css).first.click()
+                await asyncio.sleep(0.3)
+            await box.fill(text[:250])
+            await self.page.keyboard.press("Escape")  # leave caption editing
+
+    async def discard_preview(self) -> None:
+        async with self._lock:
+            btn = self.page.locator(S.PREVIEW_DISCARD.css).first
+            if await btn.count():
+                await btn.click()
+                await asyncio.sleep(0.5)
+
+    async def close_camera(self) -> None:
+        """Leave the picker, discard any preview and turn the camera off."""
+        await self.close_send_to()
+        await self.discard_preview()
+        async with self._lock:
+            for _ in range(3):
+                off = self.page.locator(S.CAMERA_OFF.css).first
+                if not await off.count():
+                    break
+                await off.click()
+                await asyncio.sleep(0.6)
+            await self._clear_overlay()
+
+    # "Best Friends" truncates names and "Recents" repeats people; the A-Z sections,
+    # "Groups" and "Stories" list everyone exactly once.
+    _DUPLICATE_SECTIONS = ("Best Friends", "Recents")
+
+    async def _recipients(self) -> list[dict]:
+        rows = await self._call("readRecipients", S.SENDTO_SELECTED_MARK) or []
+        return [r for r in rows if r["section"] not in self._DUPLICATE_SECTIONS]
+
+    async def open_send_to(self) -> list[dict]:
+        """Open the recipient picker. Rows: idx, section, name, extra, selected."""
+        async with self._lock:
+            await self.page.locator(S.PREVIEW_SEND_TO.css).first.click()
+            for _ in range(30):
+                await asyncio.sleep(0.25)
+                rows = await self._recipients()
+                if rows:
+                    return rows
+        raise SelectorError(S.SENDTO_FORM, "opening the Send To list")
+
+    async def set_recipients(self, wanted: set[int]) -> list[dict]:
+        """Click rows until exactly the rows in `wanted` (idx) are selected.
+        Returns the rows as read back from the page."""
+        async with self._lock:
+            for r in await self._recipients():
+                if r["selected"] != (r["idx"] in wanted):
+                    row = self.page.locator(f"[data-ghostctl-rcpt='{r['idx']}'] > div").first
+                    await row.scroll_into_view_if_needed()
+                    await row.click()
+                    await asyncio.sleep(0.25)
+            return await self._recipients()
+
+    async def close_send_to(self) -> None:
+        """Back from the picker to the preview (its first button is "back")."""
+        async with self._lock:
+            form = self.page.locator(S.SENDTO_FORM.css)
+            if await form.count():
+                await form.locator("button").first.click()
+                await asyncio.sleep(0.5)
+
+    async def send_snap(self) -> None:
+        async with self._lock:
+            await self._pace(clear=False)
+            btn = self.page.locator(S.SENDTO_SUBMIT.css).first
+            if not await btn.count():
+                raise SelectorError(S.SENDTO_SUBMIT, "sending the snap")
+            await btn.click()
+            for _ in range(40):
+                await asyncio.sleep(0.25)
+                if not await self.page.locator(S.SENDTO_FORM.css).count():
+                    return
+        raise ActionError("Snapchat didn't confirm the snap was sent; check the chat.")
 
     async def send_file(self, path: Path) -> str:
         """Attach an image to the open chat. Returns what happened."""

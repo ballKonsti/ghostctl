@@ -24,9 +24,9 @@ headless = "auto"
 user_agent = ""
 
 [ui]
-# Any Textual theme: textual-dark, textual-light, nord, gruvbox, catppuccin-mocha,
-# dracula, tokyo-night, monokai, flexoki, solarized-light, ... (ctrl+p to preview).
-theme = "textual-dark"
+# "ghost" (Snapchat colours) or any Textual theme: textual-dark, nord, gruvbox,
+# catppuccin-mocha, dracula, tokyo-night, monokai, ... (ctrl+p to preview live).
+theme = "ghost"
 chat_list_width = 38
 # One line per chat instead of two.
 compact_chat_list = false
@@ -38,9 +38,9 @@ time_format = "%H:%M"
 show_date_separators = true
 show_reactions = true
 # Colours for sender names and the unread marker (any Rich colour).
-me_color = "bold cyan"
-them_color = "bold red"
-unread_color = "bold red"
+me_color = "#2EA8FF"
+them_color = "#F23C57"
+unread_color = "#F23C57"
 unread_marker = "●"
 
 [notifications]
@@ -83,12 +83,13 @@ compose = "i"
 reply = "r"
 menu = "e"
 open_media = "o"
+camera = "c"
 send_file = "a"
 search = "slash"
 mark_read = "m"
 stories = "s"
 refresh = "ctrl+r"
-call = "c"
+call = "C"
 help = "question_mark"
 quit = "q"
 """

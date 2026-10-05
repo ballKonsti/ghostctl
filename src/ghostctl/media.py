@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -10,6 +11,11 @@ import tempfile
 from pathlib import Path
 
 from .bridge import Media
+
+
+# textual-image logs a traceback when a terminal doesn't answer its probe; that
+# would print over the TUI. The fallback below handles it silently.
+logging.getLogger("textual_image").setLevel(logging.CRITICAL)
 
 
 def _import_textual_image():
@@ -63,11 +69,17 @@ def image_widget_class(protocol: str):
     (kitty graphics, then sixel, then half-blocks)."""
     if protocol == "none":
         return None
+    if protocol == "auto" and detect_terminal() == "kitty":
+        # kitty always speaks its own graphics protocol; don't let a failed
+        # probe (e.g. a slow terminal reply) downgrade snaps to half-blocks.
+        return timg.TGPImage
     return _PROTOCOLS.get(protocol, timg.Image)
 
 
 def auto_protocol_name() -> str:
-    """Which protocol textual-image picked for this terminal."""
+    """Which protocol is used for this terminal in "auto" mode."""
+    if detect_terminal() == "kitty":
+        return "kitty"
     r = textual_image_renderable
     names = {r.TGPImage: "kitty", r.SixelImage: "sixel", r.HalfcellImage: "halfblock",
              r.UnicodeImage: "unicode"}

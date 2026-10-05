@@ -189,6 +189,58 @@ CAMERA_ONLY_HINT = Sel("camera_only_hint", "text='Click the Camera to send Snaps
 NOT_SUPPORTED_ON_WEB = "Not Supported on Web"
 
 
+# --- Snap / story viewer (verified 2026-10-05 from a real snap) ---
+
+# The snap itself: an img or video inside the "media content" region. (The page
+# also shows a large decorative image next to it; never pick "the biggest image".)
+VIEWER_MEDIA = Sel("viewer_media", "[aria-label='media content'] img, [aria-label='media content'] video")
+
+# Tapping the media (its role=button wrapper) advances to the next snap.
+VIEWER_ADVANCE = Sel("viewer_advance", "[aria-label='media content'] [role='button']")
+
+# Close button of the viewer.
+VIEWER_CLOSE = Sel("viewer_close", "[aria-label='media content'] [aria-label='close'] button")
+
+# --- Camera (live snaps; verified 2026-10-05 with a real webcam) ---
+
+# Composer row: the camera button is the button right before the message box.
+CAMERA_BUTTON = Sel("camera_button", "button:has(+ div [role='textbox'][contenteditable='true'])")
+
+# First-use notice before the browser asks for camera access.
+CAMERA_GOT_IT = Sel("camera_got_it", "text='Got it!'")
+
+# Live camera feed.
+CAMERA_VIDEO = Sel("camera_video", "#local-video")
+
+# Shutter: the untitled ring right before the lens buttons (tap = photo, hold = video).
+CAMERA_SHUTTER = Sel("camera_shutter", "#portal-container button:not([title]):has(+ button[title] > img[alt])")
+
+# Lens carousel arrows (they carry keyboard-shortcut hints).
+CAMERA_LENS_PREV = Sel("camera_lens_prev", "#portal-container button[aria-keyshortcuts='left']")
+CAMERA_LENS_NEXT = Sel("camera_lens_next", "#portal-container button[aria-keyshortcuts='right']")
+
+# Lens buttons in the carousel (title = lens name).
+CAMERA_LENS = Sel("camera_lens", "#portal-container button[title] > img[alt]")
+
+# Close the camera.
+CAMERA_OFF = Sel("camera_off", "button[title='Turn off camera']")
+
+# Snap preview after capturing.
+PREVIEW = Sel("preview", "#snap-preview-container")
+PREVIEW_MEDIA = Sel("preview_media", "#snap-preview-container img, #snap-preview-container video")
+PREVIEW_CAPTION_BUTTON = Sel("preview_caption_button", "button[title='Add a caption']")
+PREVIEW_CAPTION = Sel("preview_caption", "textarea[aria-label='Caption Input']")
+PREVIEW_DISCARD = Sel("preview_discard", "button[title='Close snap preview and return to camera.']")
+PREVIEW_SEND_TO = Sel("preview_send_to", "role=button[name='Send To']")
+
+# Recipient picker ("Send To"): a form with a search box, section headings (h2)
+# and one li per recipient. Every row has an "Unselect chosen user" checkmark;
+# it is visibility:visible only on selected rows.
+SENDTO_FORM = Sel("sendto_form", "#portal-container form")
+SENDTO_SELECTED_MARK = "Unselect chosen user"
+SENDTO_SUBMIT = Sel("sendto_submit", "#portal-container form button[type='submit']")
+
+
 def js_selectors() -> dict[str, str]:
     """CSS selectors handed to the injected page script (bridge.py)."""
     return {
