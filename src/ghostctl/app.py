@@ -25,6 +25,7 @@ from textual.widgets.option_list import Option
 
 from . import config as cfgmod
 from . import creds as C
+from . import emojis as E
 from . import media as M
 from .bridge import (
     ActionError,
@@ -66,6 +67,7 @@ ACTIONS = {
     "open_media": ("open_media", "open snap or media (snaps: marks it viewed)"),
     "camera": ("camera", "take a live photo snap with your webcam"),
     "send_file": ("send_file", "send an image from a file"),
+    "emoji": ("emoji", "emoji picker (while writing: :name + tab, e.g. :fire or :feuer)"),
     "search": ("search", "search chats"),
     "mark_read": ("mark_read", "mark the selected chat as read"),
     "stories": ("stories", "view stories"),
@@ -675,6 +677,75 @@ class CameraScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+class ComposeInput(Input):
+    """The message box: tab accepts the first emoji suggestion."""
+
+    async def _on_key(self, event: events.Key) -> None:
+        # Input binds ctrl+e itself (end of line); the emoji picker key wins here.
+        if event.key in self.app.keys.get("emoji", "").split(","):
+            event.prevent_default()
+            event.stop()
+            self.app.action_emoji()
+            return
+        if event.key == "tab" and getattr(self.app, "emoji_suggestions", None):
+            event.prevent_default()
+            event.stop()
+            self.app.accept_emoji_suggestion()
+            return
+        await super()._on_key(event)
+
+
+class EmojiScreen(ModalScreen[str | None]):
+    """Search every emoji by English or German name; recent ones first."""
+
+    BINDINGS = [Binding("escape", "cancel", "close"), Binding("down", "down", show=False),
+                Binding("up", "up", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog tall"):
+            yield Static(Text.assemble(("Emoji  ", f"bold {YELLOW}"), ("type to search · enter insert", DIM)))
+            yield Input(placeholder="fire, herz, lach, skull…", id="emoji-q")
+            yield OptionList(id="emoji-list")
+
+    def on_mount(self) -> None:
+        self.fill("")
+        self.query_one("#emoji-q").focus()
+
+    def fill(self, q: str) -> None:
+        ol = self.query_one("#emoji-list", OptionList)
+        ol.clear_options()
+        results = E.search(q, 80)
+        if not q:
+            ol.add_option(Option(Text(" recent", style=f"bold {DIM}"), disabled=True))
+        for char, name in results:
+            ol.add_option(Option(Text.assemble(f" {char}  ", (name, DIM)), id=char))
+        if results:
+            ol.highlighted = 1 if not q else 0
+
+    @on(Input.Changed, "#emoji-q")
+    def changed(self, event: Input.Changed) -> None:
+        self.fill(event.value)
+
+    @on(Input.Submitted, "#emoji-q")
+    def submitted(self) -> None:
+        opt = self.query_one("#emoji-list", OptionList).highlighted_option
+        if opt and opt.id:
+            self.dismiss(opt.id)
+
+    @on(OptionList.OptionSelected, "#emoji-list")
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_down(self) -> None:
+        self.query_one("#emoji-list", OptionList).action_cursor_down()
+
+    def action_up(self) -> None:
+        self.query_one("#emoji-list", OptionList).action_cursor_up()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class LoginScreen(ModalScreen[tuple[str, str, bool] | None]):
     """Username + password + remember me. Extra steps (2FA...) come as PromptScreens."""
 
@@ -817,6 +888,10 @@ class GhostctlApp(App[int]):
     #conv > .option-list--option-hover {{ background: $surface; }}
     #activity {{ height: 1; padding: 0 2; color: $text-muted; }}
     #compose {{ margin: 0 1; border: tall $panel; background: $surface; }}
+    #emoji-suggest {{ height: 1; padding: 0 2; display: none; }}
+    #emoji-suggest.visible {{ display: block; }}
+    EmojiScreen {{ align: center middle; }}
+    #emoji-list {{ height: 1fr; }}
     #compose:focus {{ border: tall $primary; }}
     #empty {{ height: 1fr; align: center middle; }}
     #empty Static {{ width: auto; text-align: center; }}
@@ -844,6 +919,7 @@ class GhostctlApp(App[int]):
         self._dumped_viewer = False
         self.audio: subprocess.Popen | None = None  # voice note being played
         self.playing_key: str | None = None
+        self.emoji_suggestions: list[tuple[str, str]] = []
         self.keys = {name: self.cfg["keys"].get(name, "") for name in ACTIONS}
         for name, (action, _desc) in ACTIONS.items():
             if self.keys[name]:
@@ -872,7 +948,8 @@ class GhostctlApp(App[int]):
                 yield Static("", id="conv-head")
                 yield OptionList(id="conv")
                 yield Static("", id="activity")
-                yield Input(placeholder="Send a chat", id="compose")
+                yield Static("", id="emoji-suggest")
+                yield ComposeInput(placeholder="Send a chat", id="compose")
         yield Static("", id="status")
         yield Footer()
 
@@ -1438,6 +1515,7 @@ class GhostctlApp(App[int]):
 
     @on(Input.Changed, "#compose")
     def draft_changed(self, event: Input.Changed) -> None:
+        self.update_emoji(event.input)
         if not self.cfg["behavior"]["send_typing"] or event.value.startswith("/") or not self.bridge:
             return
         if self._draft_task:
@@ -1454,9 +1532,56 @@ class GhostctlApp(App[int]):
 
         self._draft_task = asyncio.create_task(later(event.value))
 
+    def update_emoji(self, box: Input) -> None:
+        """Turn a finished :code: into its emoji and suggest matches for :partial."""
+        value = box.value
+        done = E.CODE.search(value[-40:]) if value.endswith(":") else None
+        if done and value.endswith(done.group(0)) and (char := E.lookup(done.group(1))):
+            box.value = value[: -len(done.group(0))] + char
+            box.cursor_position = len(box.value)
+            E.remember(char)
+            value = box.value
+        m = E.PARTIAL.search(value)
+        self.emoji_suggestions = E.search(m.group(1), 8) if m else []
+        bar = self.query_one("#emoji-suggest", Static)
+        if self.emoji_suggestions:
+            t = Text.assemble(("tab ", f"bold {YELLOW}"))
+            for i, (char, name) in enumerate(self.emoji_suggestions):
+                t.append(f" {char} ")
+                t.append(name if i == 0 else "", style=DIM)
+            bar.update(t)
+            bar.add_class("visible")
+        else:
+            bar.remove_class("visible")
+
+    def accept_emoji_suggestion(self) -> None:
+        box = self.query_one("#compose", Input)
+        m = E.PARTIAL.search(box.value)
+        if not m or not self.emoji_suggestions:
+            return
+        char = self.emoji_suggestions[0][0]
+        box.value = box.value[: m.start(1) - 1] + char
+        box.cursor_position = len(box.value)
+        E.remember(char)
+
+    @work(group="emoji", exit_on_error=False)
+    async def action_emoji(self) -> None:
+        if not self._need_chat():
+            return
+        char = await self.push_screen_wait(EmojiScreen())
+        box = self.query_one("#compose", Input)
+        box.focus()
+        if char:
+            E.remember(char)
+            box.insert_text_at_cursor(char)
+
     @on(Input.Submitted, "#compose")
     def draft_submitted(self, event: Input.Submitted) -> None:
+        self.emoji_suggestions = []
+        self.query_one("#emoji-suggest").remove_class("visible")
         text = event.value.strip()
+        if not text.startswith("/send "):
+            text = E.emojize(text)
         if self._draft_task:
             self._draft_task.cancel()
         if not text:

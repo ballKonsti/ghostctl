@@ -71,6 +71,7 @@ Press `?` in the app for the list. All keys can be rebound in the config.
 | `o` | open the selected snap or photo/video |
 | `c` | live snap: webcam preview, take it (`space`), lenses (`←/→`), caption, Send To, `esc` retake |
 | `a` | send an image (file picker) |
+| `ctrl+e` | emoji picker (search English or German names; recent first) |
 | `/` | search chats |
 | `m` | mark the selected chat as read |
 | `s` | stories |
@@ -78,7 +79,8 @@ Press `?` in the app for the list. All keys can be rebound in the config.
 | `C` | calls (not supported in the terminal) |
 | `q` | quit |
 
-In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play video, `esc` close.
+While writing, `:fire:` becomes 🔥 and `:fi` / `:feuer` shows suggestions — `tab`
+takes the first. In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play video, `esc` close.
 
 ## What Snapchat Web allows (checked 2026-10-05)
 
@@ -91,6 +93,12 @@ In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play video, `esc` clo
   and groups are listed too) and send. ghostctl doesn't fake a webcam, so a snap
   can't come from a file; send images **in chat** instead (`a` or `/send`).
 - **Chat media upload:** png, jpeg and gif only. No video.
+- **Voice notes:** received ones show as "▶ Voice note · 0:09"; `o` plays them in the
+  background (mpv/ffplay/paplay), `o` again stops. The web client has no
+  microphone button, so voice notes can't be *sent* from it.
+- **Video snaps:** the web camera's shutter only takes photos.
+- **Emoji:** ghostctl handles every emoji (families, skin tones, flags…); your
+  terminal needs a colour emoji font to draw them, e.g. `noto-fonts-emoji` on Arch.
 - **Saved status:** the page only reveals it in a message's menu. ghostctl shows
   💾 once you've opened the menu (`e`) on a message.
 - **Typing:** while you write, ghostctl mirrors your draft into Snapchat's
