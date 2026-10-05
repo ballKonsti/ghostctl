@@ -20,10 +20,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DirectoryTree, Footer, Input, OptionList, Static
+from textual.widgets import Checkbox, DirectoryTree, Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from . import config as cfgmod
+from . import creds as C
 from . import media as M
 from .bridge import (
     ActionError,
@@ -37,6 +38,7 @@ from .bridge import (
     SelectorError,
 )
 from .browser import HOME, ProfileLocked, Session, from_config
+from .login import run_login
 from .theme import (
     CALL_GREEN,
     CHAT_BLUE,
@@ -683,6 +685,97 @@ class CameraScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+class LoginScreen(ModalScreen[tuple[str, str, bool] | None]):
+    """Username + password + remember me. Extra steps (2FA...) come as PromptScreens."""
+
+    BINDINGS = [Binding("escape", "cancel", "quit")]
+
+    def __init__(self, can_remember: bool, error: str = "") -> None:
+        super().__init__()
+        self.can_remember, self.error = can_remember, error
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog login"):
+            yield Center(Static(Text(GHOST_ART, style=YELLOW)))
+            yield Static("")
+            yield Center(Static(Text("Log in to Snapchat", style="bold")))
+            yield Static(Text(self.error, style=SNAP_RED), id="login-msg")
+            yield Input(placeholder="Username or email", id="user")
+            yield Input(placeholder="Password", password=True, id="pw")
+            yield Checkbox("Remember me — stored encrypted in your system keyring",
+                           value=self.can_remember, disabled=not self.can_remember, id="remember")
+            yield Static(Text.assemble(
+                ("enter", f"bold {YELLOW}"), (" log in   ", DIM), ("esc", f"bold {YELLOW}"), (" quit", DIM),
+                ("\nYour password goes only into Snapchat's own login form.", DIM)))
+
+    def on_mount(self) -> None:
+        self.query_one("#user").focus()
+
+    @on(Input.Submitted, "#user")
+    def next_field(self) -> None:
+        self.query_one("#pw").focus()
+
+    @on(Input.Submitted, "#pw")
+    def submit(self) -> None:
+        user = self.query_one("#user", Input).value.strip()
+        pw = self.query_one("#pw", Input).value
+        if not user:
+            self.query_one("#user").focus()
+            return
+        if not pw:
+            return
+        self.dismiss((user, pw, self.query_one("#remember", Checkbox).value))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PromptScreen(ModalScreen[str | None]):
+    """One question during login (2FA code, password again, ...)."""
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, prompt: str, secret: bool, messages: list[str]) -> None:
+        super().__init__()
+        self.prompt, self.secret, self.messages = prompt, secret, messages
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Static(Text("Snapchat", style=f"bold {YELLOW}"))
+            for m in self.messages[-3:]:
+                yield Static(Text(m, style=DIM))
+            yield Input(placeholder=self.prompt, password=self.secret, id="answer")
+
+    def on_mount(self) -> None:
+        self.query_one("#answer").focus()
+
+    @on(Input.Submitted, "#answer")
+    def done(self, event: Input.Submitted) -> None:
+        if event.value.strip():
+            self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class AppLoginUI:
+    """Bridges run_login() to the TUI."""
+
+    def __init__(self, app: GhostctlApp) -> None:
+        self.app = app
+        self.messages: list[str] = []
+
+    async def ask(self, prompt: str, secret: bool = False) -> str | None:
+        return await self.app.push_screen_wait(PromptScreen(prompt, secret, self.messages))
+
+    def say(self, text: str) -> None:
+        self.messages.append(text)
+        self.app.status(f"Snapchat: {text}")
+
+    async def confirm(self, question: str) -> bool:
+        return await self.app.push_screen_wait(ConfirmScreen(question))
+
+
 # --- main app ---
 
 
@@ -697,7 +790,14 @@ class GhostctlApp(App[int]):
     .dialog OptionList {{ height: auto; max-height: 24; border: none; background: $surface; }}
     .dialog.tall OptionList {{ height: 1fr; max-height: 100%; }}
     .dialog Input {{ margin: 1 0; }}
+    .dialog.login {{ width: 64; }}
+    .dialog.login Center {{ height: auto; }}
+    .dialog.login Center Static {{ width: auto; }}
+    .dialog.login Input {{ margin: 0 0 1 0; }}
+    .dialog Checkbox {{ background: $surface; border: none; margin-bottom: 1; }}
+    LoginScreen, PromptScreen {{ align: center middle; background: $background; }}
     HelpScreen, ConfirmScreen, MenuScreen, FilePickerScreen, SendToScreen {{ align: center middle; }}
+    #login-msg {{ height: auto; margin-bottom: 1; }}
     ViewerScreen, CameraScreen {{ background: black; }}
     #viewer {{ background: black; height: 100%; }}
     #viewer-top, #viewer-bottom {{ height: 1; padding: 0 1; background: black; }}
@@ -844,8 +944,12 @@ class GhostctlApp(App[int]):
         except Exception as e:  # noqa: BLE001 - surface anything to the user
             self.status(f"Browser failed to start: {e}", error=True)
             return
-        if st.session is not Session.LOGGED_IN:
-            self.status(st.note or f"Session {st.session.value}. Run `ghostctl login`.", error=True)
+        if st.session is Session.LOGGED_OUT:
+            if not await self.log_in():
+                self.status("Not logged in. Press q to quit, or restart ghostctl to try again.", error=True)
+                return
+        elif st.session is not Session.LOGGED_IN:
+            self.status(st.note or f"Session {st.session.value}.", error=True)
             return
         proto = self.cfg["images"]["protocol"]
         proto = M.auto_protocol_name() if proto == "auto" else proto
@@ -862,6 +966,61 @@ class GhostctlApp(App[int]):
         self.live = self.bridge.live
         self.render_topbar()
         self.ready_status()
+        self.watch_session()
+
+    async def log_in(self, error: str = "") -> bool:
+        """Log in through the TUI: saved login first, else the login screen."""
+        ui = AppLoginUI(self)
+        saved = C.load()
+        got = None
+        if saved:
+            self.status(f"Logging in as {saved.username} (saved login)…")
+            got = await run_login(self.browser, ui, saved)
+        while got is None:
+            form = await self.push_screen_wait(LoginScreen(C.available(), error))
+            if form is None:
+                return False
+            user, pw, remember = form
+            self.status(f"Logging in as {user}…")
+            got = await run_login(self.browser, ui, C.Creds(user, pw))
+            if got is None:
+                error = ui.messages[-1] if ui.messages else "Login didn't complete."
+                await self.browser.goto_web()
+                continue
+            if remember and got.password:
+                self.notify("Login saved to your keyring." if C.save(got) else "Couldn't write to the keyring.")
+        self.status("Logged in. Saving session…")
+        await asyncio.sleep(3)  # let the session reach the profile
+        return True
+
+    @work(exclusive=True, group="watch", exit_on_error=False)
+    async def watch_session(self) -> None:
+        """If Snapchat ends the session, log back in (saved login or login screen)."""
+        while True:
+            await asyncio.sleep(120)
+            try:
+                state = await self.browser._probe()
+            except Exception:  # noqa: BLE001
+                continue
+            if state is not Session.LOGGED_OUT:
+                continue
+            self.notify("Snapchat logged you out — logging back in…", severity="warning")
+            if self.bridge:
+                await self.bridge.stop()
+            if not await self.log_in():
+                self.status("Logged out. Restart ghostctl to log in.", error=True)
+                return
+            await self.browser.goto_web()
+            if self.bridge is None or self.bridge.page is not self.browser.page:
+                # The browser was restarted (e.g. login finished in a window).
+                self.bridge = Bridge(self.browser.page, self.on_bridge_event,
+                                     float(self.cfg["behavior"]["action_gap"]))
+            try:
+                await self.bridge.start()
+            except Exception as e:  # noqa: BLE001
+                self.fail(e)
+                return
+            self.ready_status()
 
     def on_worker_state_changed(self, event) -> None:
         """Background tasks never crash the app; their errors go to the status bar."""

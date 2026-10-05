@@ -1,30 +1,52 @@
-"""`ghostctl login`: log in from the terminal by relaying Snapchat's login screens.
+"""Log in by relaying Snapchat's login screens to a UI (terminal prompts or the TUI).
 
-The browser runs off-screen. Each screen (username, password, 2FA code...) is
-recognised and turned into a terminal prompt. The password is read with getpass,
-typed into the page and dropped; it is never stored or logged. Screens ghostctl
-can't handle (an interactive captcha, an unknown verification step) are handed
-over by moving the browser window on-screen.
+The browser runs headless. Each screen (username, password, 2FA code...) is
+recognised and turned into a question for the UI. Saved credentials (creds.py)
+answer the username/password questions automatically, once. The password is
+typed into Snapchat's own form; ghostctl only keeps it if you choose "remember".
+Screens that need a human (an interactive captcha, an unknown verification
+step) are handed over to a visible browser window.
 """
 
 from __future__ import annotations
 
 import asyncio
 import getpass
+from typing import Protocol
 from urllib.parse import urlparse
 
 from playwright.async_api import Error as PlaywrightError, Locator, Page
 
 from . import selectors as S
-from .browser import Browser, Session
+from .browser import Browser, Mode, Session
+from .creds import Creds
 
 STUCK_AFTER = 45.0  # seconds on an unrecognised screen before offering the window
 TYPE_DELAY_MS = 70  # per-keystroke delay, human-ish
 
 
-async def _ask(prompt: str, secret: bool = False) -> str:
-    fn = getpass.getpass if secret else input
-    return (await asyncio.to_thread(fn, prompt)).strip()
+class LoginUI(Protocol):
+    async def ask(self, prompt: str, secret: bool = False) -> str | None: ...
+    def say(self, text: str) -> None: ...
+    async def confirm(self, question: str) -> bool: ...
+
+
+class TerminalUI:
+    """Plain prompts for `ghostctl login`."""
+
+    async def ask(self, prompt: str, secret: bool = False) -> str | None:
+        fn = getpass.getpass if secret else input
+        try:
+            return (await asyncio.to_thread(fn, f"{prompt}: ")).strip()
+        except EOFError:
+            return None
+
+    def say(self, text: str) -> None:
+        print(f"  snapchat: {text}")
+
+    async def confirm(self, question: str) -> bool:
+        a = await self.ask(f"{question} [Y/n]")
+        return a is not None and not a.lower().startswith("n")
 
 
 async def _visible(loc: Locator) -> bool:
@@ -84,24 +106,32 @@ async def _wait_change(b: Browser, before: tuple, timeout: float = 20.0) -> None
             pass
 
 
-async def _hand_over(b: Browser, reason: str) -> bool:
-    print(f"\n{reason}")
-    answer = await _ask("Show the browser window so you can finish there? [Y/n] ")
-    if answer.lower().startswith("n"):
+async def _hand_over(b: Browser, ui: LoginUI, reason: str) -> bool:
+    """Finish in a visible window, then go back to headless."""
+    if not await ui.confirm(f"{reason} Open a browser window to finish there?"):
         return False
-    await b.reveal()
-    print("Finish logging in in the window. Waiting...")
+    headless = b.mode is Mode.HEADLESS
+    await b.close()
+    await b.open_headed()
+    ui.say("Finish logging in in the window; it closes by itself afterwards.")
+    ok = False
     while not b.closed:
         if await b.session_state(timeout=5) is Session.LOGGED_IN:
-            return True
-    return False
+            ok = True
+            await asyncio.sleep(3)  # let the session save
+            break
+    await b.close()
+    if headless:
+        await b.start()
+    return ok
 
 
-async def terminal_login(b: Browser) -> bool:
-    page = await b.open_offscreen()
-    print("Connecting to Snapchat Web (browser runs off-screen)...")
+async def run_login(b: Browser, ui: LoginUI, creds: Creds | None = None) -> Creds | None:
+    """Drive the login. The browser must already be on Snapchat Web.
+    Returns the username/password that worked (for "remember me"), or None."""
     loop = asyncio.get_running_loop()
-    username: str | None = None
+    used_saved_user = used_saved_pw = False
+    username = password = ""
     shown: tuple = ()
     last_change = loop.time()
     last_sig: tuple = ()
@@ -109,10 +139,10 @@ async def terminal_login(b: Browser) -> bool:
     while not b.closed:
         state = await b._probe()
         if state is Session.LOGGED_IN:
-            return True
+            return Creds(username, password) if username and password else Creds(username or "?", "")
         if state is Session.BLOCKED:
-            print("Snapchat refused this browser (\"Browser not supported\").")
-            return False
+            ui.say('Snapchat refused this browser ("Browser not supported").')
+            return None
         page = b.page
         if await _visible(page.locator(S.COOKIE_ESSENTIAL.css)):
             await page.locator(S.COOKIE_ESSENTIAL.css).first.click()
@@ -124,48 +154,74 @@ async def terminal_login(b: Browser) -> bool:
             last_sig, last_change = sig, loop.time()
         on_accounts = urlparse(page.url).hostname == S.ACCOUNTS_HOST
 
-        # Show what Snapchat says (errors, instructions) once per screen.
+        # Pass on what Snapchat says (errors, instructions) once per screen.
         if on_accounts and sig[1:3] != shown:
             shown = sig[1:3]
             for line in (*sig[1], *sig[2]):
-                print(f"  snapchat: {line}")
+                if line != username:
+                    ui.say(line)
 
         if await _visible(page.locator(S.ACC_VERIFYING.css)):
             if loop.time() - last_change > STUCK_AFTER:
-                return await _hand_over(b, "The security check needs a human (captcha).")
+                ok = await _hand_over(b, ui, "The security check needs a human (captcha).")
+                return Creds(username, password) if ok else None
             await asyncio.sleep(1)
             continue
 
         landing = page.locator(S.LOGIN_FORM.css).first
         acc_user = page.locator(S.ACC_USERNAME.css).first
-        password = page.locator(S.ACC_PASSWORD.css).first
+        pw_box = page.locator(S.ACC_PASSWORD.css).first
         other = page.locator(S.ACC_OTHER_INPUT.css).first
 
-        if await _visible(landing):
-            username = username or await _ask("Username or email: ")
-            await _type(landing, username)
-            await page.locator(S.LOGIN_SUBMIT.css).first.click()
+        async def get_username() -> str | None:
+            # With given credentials (login form or keyring) a second username
+            # prompt means they were rejected: give up so the caller can show
+            # Snapchat's message on its own form.
+            nonlocal used_saved_user
+            if creds:
+                if used_saved_user:
+                    return None
+                used_saved_user = True
+                return creds.username
+            return await ui.ask("Username or email")
+
+        if await _visible(landing) or (on_accounts and await _visible(acc_user) and not await _visible(pw_box)):
+            field = landing if await _visible(landing) else acc_user
+            u = await get_username()
+            if not u:
+                return None
+            username = u
+            await _type(field, username)
+            if field is landing:
+                await page.locator(S.LOGIN_SUBMIT.css).first.click()
+            else:
+                await _submit(page, field)
             await _wait_change(b, sig)
-        elif on_accounts and await _visible(password):
-            secret = await _ask("Password (not stored): ", secret=True)
-            await _type(password, secret)
-            del secret
-            await _submit(page, password)
-            await _wait_change(b, sig)
-        elif on_accounts and await _visible(acc_user):
-            # Back on the username step: usually an error was shown above.
-            username = await _ask("Username or email: ")
-            await _type(acc_user, username)
-            await _submit(page, acc_user)
+        elif on_accounts and await _visible(pw_box):
+            if creds:
+                if used_saved_pw:
+                    return None  # wrong password: back to the caller's form
+                used_saved_pw = True
+                pw = creds.password
+            else:
+                pw = await ui.ask("Password", secret=True)
+            if not pw:
+                return None
+            password = pw
+            await _type(pw_box, pw)
+            await _submit(page, pw_box)
             await _wait_change(b, sig)
         elif on_accounts and await _visible(other):
             label = (await _input_label(other)).strip() or "Code"
-            value = await _ask(f"{label}: ")
+            value = await ui.ask(label)
+            if not value:
+                return None
             await _type(other, value)
             await _submit(page, other)
             await _wait_change(b, sig)
         else:
             if loop.time() - last_change > STUCK_AFTER:
-                return await _hand_over(b, "ghostctl doesn't recognise this login screen.")
+                ok = await _hand_over(b, ui, "ghostctl doesn't recognise this login screen.")
+                return Creds(username, password) if ok else None
             await asyncio.sleep(1)
-    return False
+    return None

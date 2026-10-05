@@ -21,22 +21,32 @@ frames, `notify-send` for desktop notifications.
 ## Run
 
 ```sh
-ghostctl login            # log in from the terminal (username, password, 2FA code)
-ghostctl login --window   # or log in yourself in a visible browser window
-ghostctl check            # confirm the saved session works
-ghostctl                  # start the TUI
-ghostctl config --edit    # create/edit ~/.config/ghostctl/config.toml
-ghostctl inspect          # debug: dump the live page to debug/ to fix selectors
+ghostctl                    # start the TUI (shows a login screen if you're logged out)
+ghostctl login              # or log in from the terminal (username, password, 2FA code)
+ghostctl login --remember   # already logged in: save your login for automatic re-login
+ghostctl login --window     # log in yourself in a visible browser window
+ghostctl forget             # delete the saved login from the keyring
+ghostctl logout             # delete the session and the saved login
+ghostctl check              # confirm the saved session works
+ghostctl config --edit      # create/edit ~/.config/ghostctl/config.toml
+ghostctl inspect            # debug: dump the live page to debug/ to fix selectors
 ```
 
-`ghostctl login` relays Snapchat's login screens to the terminal. Your password is
-read without echo, typed into Snapchat's own form and then discarded; it is never
-stored or logged. If Snapchat shows something ghostctl can't handle (an
-interactive captcha, an unknown verification step), it offers to show the
-browser window so you can finish there.
+### Staying logged in
 
-The login lives in the Chromium profile at `~/.ghostctl/profile`, so you log in
-once. Only one ghostctl process can use the profile at a time.
+You log in once: the session lives in the Chromium profile at `~/.ghostctl/profile`
+(like a browser remembering you). Only one ghostctl process can use it at a time.
+
+If Snapchat ever ends the session (after a long time, a password change, ...),
+ghostctl notices within two minutes. With **Remember me** ticked on the login
+screen (or after `ghostctl login --remember`), your username and password are
+kept in the system keyring (GNOME Keyring / KWallet via Secret Service, macOS
+Keychain, Windows Credential Locker — never in a file), and ghostctl logs back in
+by itself. A 2FA code can't be automated: if Snapchat asks for one, ghostctl asks you.
+
+Your password is only ever typed into Snapchat's own login form. If Snapchat
+shows something ghostctl can't handle (an interactive captcha), it offers to open
+a browser window so you can finish there.
 
 ### Headless
 

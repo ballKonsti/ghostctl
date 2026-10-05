@@ -381,6 +381,7 @@ class Bridge:
         self._poll_task: asyncio.Task | None = None
         self._last_action = 0.0
         self._lock = asyncio.Lock()  # one page action at a time
+        self._exposed = False
 
     # --- parsing ---
 
@@ -440,7 +441,9 @@ class Bridge:
         except PlaywrightError as e:
             raise SelectorError(S.FEED, "waiting for the chat list") from e
         try:
-            await self.page.expose_function("__ghostctl_emit", self._emit)
+            if not self._exposed:  # survives reloads; registering twice is an error
+                await self.page.expose_function("__ghostctl_emit", self._emit)
+                self._exposed = True
             self.live = await self._inject()
         except PlaywrightError:
             self.live = False

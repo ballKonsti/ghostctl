@@ -180,7 +180,9 @@ class Browser:
             await self._launch(Mode.HEADLESS)
             await self.goto_web()
             state = await self.session_state()
-            if state is Session.LOGGED_IN or self.headless_pref == "always":
+            # Logged out is a real answer (log in headless); only a refusal or an
+            # unrecognised page is a reason to try a window.
+            if state in (Session.LOGGED_IN, Session.LOGGED_OUT) or self.headless_pref == "always":
                 note = "" if state is Session.LOGGED_IN else self._note(state)
                 return Status(Mode.HEADLESS, state, note)
             await self.close()
@@ -196,7 +198,7 @@ class Browser:
     @staticmethod
     def _note(state: Session) -> str:
         if state is Session.LOGGED_OUT:
-            return "Not logged in. Quit and run `ghostctl login`."
+            return "Not logged in."
         if state is Session.LOGGED_IN:
             return ""
         return (
@@ -220,11 +222,6 @@ class Browser:
             {"windowId": win["windowId"], "bounds": {"left": 80, "top": 80, "width": 1280, "height": 900}},
         )
         await self.page.bring_to_front()
-
-    async def open_offscreen(self) -> Page:
-        page = await self._launch(Mode.HEADED_OFFSCREEN)
-        await self.goto_web()
-        return page
 
     async def wait_closed(self) -> None:
         """Block until the user closes every window of the visible browser."""
