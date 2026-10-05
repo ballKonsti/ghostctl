@@ -77,6 +77,7 @@ class Message:
     snap_new: bool = False  # unopened snap ("Click to view")
     reactions: list[str] = field(default_factory=list)  # "love · Konstantin"
     not_supported: bool = False  # "Not Supported on Web"
+    duration: float = 0.0  # voice note length in seconds (0 = unknown yet)
 
     @property
     def mine(self) -> bool:
@@ -107,14 +108,15 @@ class Conversation:
 
 @dataclass
 class Media:
-    kind: str  # "image" | "video"
+    kind: str  # "image" | "video" | "audio"
     data: bytes
     mime: str = ""
 
     @property
     def suffix(self) -> str:
         sub = self.mime.split("/")[-1].split(";")[0] if self.mime else ""
-        return "." + (sub or ("mp4" if self.kind == "video" else "png"))
+        default = {"video": "mp4", "audio": "wav"}.get(self.kind, "png")
+        return "." + ({"x-wav": "wav", "mpeg": "mp3", "jpeg": "jpg"}.get(sub, sub) or default)
 
 
 _PAGE_JS = r"""
@@ -172,7 +174,7 @@ _PAGE_JS = r"""
     const reactions = li.querySelector(SEL.msg_reactions);
     const m = {kind: 'msg', sender: ctx.sender, time: ctx.time, text: '', quote_sender: '',
                quote_text: '', media: [], snap_status: '', snap_new: false, reactions: [],
-               not_supported: false};
+               not_supported: false, duration: 0};
     if (reactions) {
       const imgs = [...reactions.querySelectorAll(SEL.msg_reaction_img)];
       m.reactions = imgs.length
@@ -189,6 +191,14 @@ _PAGE_JS = r"""
       m.text = [...body.querySelectorAll(SEL.msg_text)]
         .filter(s => !(quote && quote.contains(s))).map(txt).join('\n');
       for (const v of body.querySelectorAll('video')) m.media.push('video');
+      for (const a of body.querySelectorAll('audio')) {  // voice note
+        m.media.push('audio');
+        m.duration = isFinite(a.duration) ? a.duration : 0;
+      }
+      if (!m.text) {  // a bare link renders as <a>, not as a text span
+        const links = [...body.querySelectorAll('a[href]')].filter(l => !(quote && quote.contains(l)));
+        if (links.length) m.text = links.map(l => raw(l) || l.href).join('\n');
+      }
       for (const i of body.querySelectorAll('img')) if (!(quote && quote.contains(i))) m.media.push('image');
       const all = raw(body);
       if (all.includes(SEL.__not_supported)) { m.not_supported = true; m.text = ''; }
@@ -334,9 +344,10 @@ _PAGE_JS = r"""
     const body = [...el.children].find(c => c.tagName === 'DIV');
     if (!body) return [];
     const q = body.querySelector(SEL.msg_quote_list);
-    return [...body.querySelectorAll('img, video')]
+    return [...body.querySelectorAll('img, video, audio')]
       .filter(m => !(q && q.parentElement.contains(m)))
-      .map(m => ({tag: m.tagName.toLowerCase(), src: m.currentSrc || m.src || ''}));
+      .map(m => ({tag: m.tagName.toLowerCase(),
+                  src: m.currentSrc || m.src || (m.querySelector('source') || {}).src || ''}));
   }
 
   // Push changes: debounce per region, then hand a fresh read to Python.
@@ -411,7 +422,7 @@ class Bridge:
                     Message(
                         it["key"], it["sender"], self._dt(it["time"]), it["text"], it["quote_sender"],
                         it["quote_text"], it["media"], it["snap_status"], it["snap_new"],
-                        it["reactions"], it["not_supported"],
+                        it["reactions"], it["not_supported"], it.get("duration") or 0.0,
                     )
                 )
         return Conversation(data["id"], items, data["seen_by"], data["activity"], data["typing"])
@@ -713,9 +724,9 @@ class Bridge:
         async with self._lock:
             await self._target(key)
             found = await self._call("targetMedia")
+            kinds = {"video": "video", "audio": "audio"}
             return [
-                await self._fetch(m["src"], "video" if m["tag"] == "video" else "image",
-                                  f"{TARGET} {m['tag']} >> nth={i}")
+                await self._fetch(m["src"], kinds.get(m["tag"], "image"), f"{TARGET} {m['tag']} >> nth={i}")
                 for i, m in enumerate(found)
             ]
 

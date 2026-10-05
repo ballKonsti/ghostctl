@@ -116,3 +116,23 @@ def desktop_notify(title: str, body: str) -> None:
     elif sys.platform == "darwin" and shutil.which("osascript"):
         script = f'display notification {body!r} with title {title!r}'
         subprocess.Popen(["osascript", "-e", script])
+
+
+def play_audio(path: Path, player: str) -> subprocess.Popen | None:
+    """Play a voice note in the background (no window). Returns the process so it
+    can be stopped, or None if no player is available."""
+    cmd = player.split() if player else []
+    if cmd and shutil.which(cmd[0]):
+        if cmd[0] == "mpv":
+            cmd += ["--no-video", "--really-quiet", "--no-terminal"]
+        args = [*cmd, str(path)]
+    elif shutil.which("mpv"):
+        args = ["mpv", "--no-video", "--really-quiet", "--no-terminal", str(path)]
+    elif shutil.which("ffplay"):
+        args = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+    elif shutil.which("paplay") and path.suffix == ".wav":
+        args = ["paplay", str(path)]
+    else:
+        return None
+    return subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)

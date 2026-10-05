@@ -842,6 +842,8 @@ class GhostctlApp(App[int]):
         self._feed_seen = False
         self._draft_task: asyncio.Task | None = None
         self._dumped_viewer = False
+        self.audio: subprocess.Popen | None = None  # voice note being played
+        self.playing_key: str | None = None
         self.keys = {name: self.cfg["keys"].get(name, "") for name in ACTIONS}
         for name, (action, _desc) in ACTIONS.items():
             if self.keys[name]:
@@ -1124,6 +1126,15 @@ class GhostctlApp(App[int]):
         if m.text:
             lines.append(Text(m.text))
         for kind in m.media:
+            if kind == "audio":
+                playing = self.playing_key == m.key
+                length = f" · {int(m.duration // 60)}:{int(m.duration % 60):02d}" if m.duration else ""
+                lines.append(Text.assemble(
+                    ("■ " if playing else "▶ ", f"bold {VIDEO_PURPLE}"),
+                    (f"Voice note{length}", f"bold {VIDEO_PURPLE}"),
+                    ("   ▁▂▅▇▅▃▂▁▃▅▂", VIDEO_PURPLE if playing else DIM),
+                    ("   o to stop" if playing else "   o to play", DIM)))
+                continue
             c = VIDEO_PURPLE if kind == "video" else CHAT_BLUE
             lines.append(Text.assemble(("▣ ", f"bold {c}"), ("Video" if kind == "video" else "Photo", f"bold {c}"),
                                        ("   o to view", DIM)))
@@ -1385,6 +1396,7 @@ class GhostctlApp(App[int]):
         self.push_screen(HelpScreen(self.keys, cfgmod.CONFIG_PATH))
 
     async def action_quit(self) -> None:
+        self.stop_voice()
         if self.bridge:
             await self.bridge.stop()
         await self.browser.close()
@@ -1584,6 +1596,8 @@ class GhostctlApp(App[int]):
                 self.ready_status()
                 await self.push_screen_wait(ViewerScreen(
                     self, [(media, self.viewer_info(v, m.sender))], "Snap", viewer=True))
+            elif "audio" in m.media:
+                await self.play_voice(m)
             elif m.media:
                 self.status("Loading media…")
                 items = await self.bridge.message_media(m.key)
@@ -1600,6 +1614,40 @@ class GhostctlApp(App[int]):
                 self.notify("Nothing to open in this message.")
         except Exception as e:  # noqa: BLE001
             self.fail(e)
+
+    def stop_voice(self) -> None:
+        if self.audio and self.audio.poll() is None:
+            self.audio.terminate()
+        self.audio = None
+        self.playing_key = None
+
+    async def play_voice(self, m: Message) -> None:
+        """o on a voice note: play it in the background; o again stops."""
+        if self.playing_key == m.key:
+            self.stop_voice()
+            self.render_conv()
+            return
+        self.stop_voice()
+        self.status("Loading voice note…")
+        items = [i for i in await self.bridge.message_media(m.key) if i.kind == "audio"]
+        if not items:
+            self.notify("Couldn't load that voice note (it may have expired).")
+            return
+        path = M.save(items[0], f"voice-{m.sender}-{datetime.now():%Y%m%d-%H%M%S}")
+        self.audio = M.play_audio(path, self.cfg["images"]["video_player"])
+        if self.audio is None:
+            self.notify(f"No audio player found (install mpv). Saved to {path}", severity="warning")
+            return
+        self.playing_key = m.key
+        self.ready_status()
+        self.render_conv()
+        proc = self.audio
+        while proc.poll() is None:
+            await asyncio.sleep(0.3)
+        if self.audio is proc:
+            self.playing_key = None
+            self.audio = None
+            self.render_conv()
 
     @work(group="media", exit_on_error=False)
     async def action_stories(self) -> None:
