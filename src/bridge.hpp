@@ -1,6 +1,6 @@
 // Turns the Snapchat Web page into events (chat list, conversation) and actions.
 //
-// page.js (shared with the Python version) reads the chat list and the open
+// page.js reads the chat list and the open
 // conversation into JSON; its MutationObserver pushes changes through the
 // CDP binding __ghostctl_bind. If that fails, a thread polls instead.
 // Actions on one message find it again by key, tag it with

@@ -1,4 +1,4 @@
-// Generated from the Python version's DEFAULT_TOML; keep both in sync.
+// The default config, written out by `ghostctl config` (doubles as documentation).
 #pragma once
 #include <string_view>
 

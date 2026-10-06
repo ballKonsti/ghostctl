@@ -9,8 +9,8 @@ namespace {
 constexpr const char* SERVICE = "ghostctl";
 constexpr const char* USER_KEY = "__username__";
 
-// Same attributes as Python's keyring (SecretService backend), so either
-// version finds what the other saved.
+// Same attributes as Python's keyring (SecretService backend), so logins saved
+// by the old Python version are still found.
 const SecretSchema* schema() {
   static const SecretSchema s = {
       "org.freedesktop.Secret.Generic",

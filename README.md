@@ -4,34 +4,35 @@ A terminal client for Snapchat Web. ghostctl drives the real Snapchat Web page i
 an invisible (headless) Chromium over the DevTools protocol and puts a TUI on top
 of it. It is meant for your own account, on your own machine.
 
-ghostctl is written in **C++** (`cpp/`). The original Python version (`src/`,
-Playwright + Textual) still works with `uv run ghostctl` and shares the same
-profile, config file and saved login.
+Written in C++23: Chromium is driven directly over the DevTools protocol, the
+interface is [FTXUI](https://github.com/ArthurSonzogni/FTXUI).
 
-## Setup (C++)
+## Setup
 
 Needs a C++23 compiler (GCC 13+ or Clang 17+), CMake, Ninja, and:
 nlohmann-json, toml++, libsecret, libwebp, zlib. FTXUI and stb are fetched by CMake.
 On Arch:
 
 ```sh
-sudo pacman -S --needed base-devel cmake ninja nlohmann-json tomlplusplus libsecret libwebp zlib
+sudo pacman -S --needed base-devel cmake ninja nlohmann-json tomlplusplus libsecret libwebp zlib chromium
 ```
 
-Chromium: ghostctl uses Playwright's Chromium build if it's in `~/.cache/ms-playwright`
-(`uv run playwright install chromium`), otherwise `chromium`/`google-chrome` from
-your PATH, or `[browser] executable` in the config.
+Chromium: ghostctl uses Playwright's Chromium build if one is in `~/.cache/ms-playwright`,
+otherwise `chromium` / `google-chrome` from your PATH, or `[browser] executable`
+in the config.
 
 ```sh
-cd snapchat_cli/cpp
+cd snapchat_cli
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release
 cmake --install build-release --prefix ~/.local --strip   # puts `ghostctl` in ~/.local/bin
 ```
 
+If the build gets killed (out of memory), limit parallel jobs: `cmake --build build-release -j4`.
+
 Optional: `mpv` (or any player) for videos and voice notes, `ffmpeg` for video
-preview frames, `notify-send` for desktop notifications, and a colour emoji font
-(`noto-fonts-emoji`).
+preview frames, `notify-send` for desktop notifications, a colour emoji font
+(`noto-fonts-emoji`) and a Nerd Font for the rounded pills.
 
 ## Run
 
@@ -139,10 +140,8 @@ key binding.
 
 ## When Snapchat changes its layout
 
-Every DOM selector is in `cpp/src/selectors.hpp` (and `src/ghostctl/selectors.py`
-for the Python version), each with a comment saying what it targets. The page
-script that reads chats and messages is `cpp/src/page.js` (a copy of the one in the
-Python bridge). If an error names a selector, run `ghostctl inspect`, go to the
+Every DOM selector is in `src/selectors.hpp`, each with a comment saying what it
+targets. The page script that reads chats and messages is `src/page.js`. If an error names a selector, run `ghostctl inspect`, go to the
 view that broke, type a label and press Enter. Each dump in `debug/<time>-<label>/`
 contains `aria.yaml`, `elements.json`, `page.html`, `screenshot.png` and `url.txt`.
 The first snap/story you open is also dumped to `~/.ghostctl/debug/` (turn off

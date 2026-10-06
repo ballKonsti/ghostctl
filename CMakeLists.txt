@@ -31,7 +31,7 @@ pkg_check_modules(SECRET REQUIRED IMPORTED_TARGET libsecret-1)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp libwebpdemux)
 pkg_check_modules(ZLIB REQUIRED IMPORTED_TARGET zlib)
 
-# Embed the page script (shared with the Python version) and the helper script.
+# Embed the page scripts (page reader, selector helpers, inspect collector).
 foreach(js page helpers collect)
   file(READ ${CMAKE_CURRENT_SOURCE_DIR}/src/${js}.js JS_CONTENT)
   set(JS_NAME ${js})

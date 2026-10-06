@@ -1,4 +1,4 @@
-// Every DOM selector ghostctl uses, in one place (port of src/ghostctl/selectors.py).
+// Every DOM selector ghostctl uses, in one place.
 //
 // Rules: prefer roles, aria-labels and visible text; never generated class names.
 // Syntax is understood by helpers.js: "role=x[name='y']", "text='z'", CSS, ":visible",
@@ -83,7 +83,7 @@ inline constexpr Sel SENDTO_FORM{"sendto_form", "#portal-container form"};
 inline constexpr std::string_view SENDTO_SELECTED_MARK = "Unselect chosen user";
 inline constexpr Sel SENDTO_SUBMIT{"sendto_submit", "#portal-container form button[type='submit']"};
 
-// Selectors handed to page.js (its SEL argument), same keys as the Python version.
+// Selectors handed to page.js (its SEL argument).
 inline nlohmann::json page_selectors() {
   return {
       {"feed", "[role='list'][aria-label='Friends Feed']"},

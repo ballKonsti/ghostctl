@@ -1,6 +1,6 @@
 """Generate src/emoji_data.inc from the `emoji` package (English, aliases, German).
 
-Run from the repo root:  uv run python cpp/tools/gen_emoji.py
+Run from the repo root:  uv run --with emoji python tools/gen_emoji.py
 """
 
 import json

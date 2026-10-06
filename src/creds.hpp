@@ -1,5 +1,6 @@
 // Optional saved login in the system keyring (Secret Service via libsecret) —
-// never in a file. Compatible with what the Python version stored with `keyring`.
+// never in a file. Uses the same attributes as Python's `keyring`, so logins saved by
+// the old Python version (and other keyring tools) are found.
 #pragma once
 
 #include <optional>

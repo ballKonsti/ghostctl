@@ -228,7 +228,7 @@
                   src: m.currentSrc || m.src || (m.querySelector('source') || {}).src || ''}));
   }
 
-  // Push changes: debounce per region, then hand a fresh read to Python.
+  // Push changes: debounce per region, then hand a fresh read to ghostctl.
   const pending = new Set();
   let timer = null;
   const flush = () => {

@@ -39,7 +39,7 @@ Browser::~Browser() { close(); }
 
 std::string Browser::find_exe() const {
   if (!exe_.empty()) return expand_user(exe_).string();
-  // Playwright's Chromium (newest build first): what the Python version used.
+  // Playwright's Chromium build (newest first), if installed.
   fs::path cache = home_dir() / ".cache" / "ms-playwright";
   std::vector<fs::path> found;
   std::error_code ec;

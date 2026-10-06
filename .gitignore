@@ -1,19 +1,8 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
+# Build output
 build/
-dist/
-wheels/
-*.egg-info
+build-release/
+compile_commands.json
 
-# Virtual environments
-.venv
-
-# ghostctl
+# ghostctl runtime data
 .ghostctl/
 debug/
-
-# C++ build
-cpp/build/
-cpp/compile_commands.json
-cpp/build-release/
