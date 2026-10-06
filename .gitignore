@@ -12,3 +12,7 @@ wheels/
 # ghostctl
 .ghostctl/
 debug/
+
+# C++ build
+cpp/build/
+cpp/compile_commands.json

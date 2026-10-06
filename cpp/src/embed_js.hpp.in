@@ -1,0 +1,7 @@
+// Generated from src/@JS_NAME@.js by CMake. Do not edit.
+#pragma once
+#include <string_view>
+
+namespace ghost::js {
+inline constexpr std::string_view @JS_NAME@ = R"GHOSTJS(@JS_CONTENT@)GHOSTJS";
+}
