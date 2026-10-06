@@ -141,6 +141,13 @@ void Browser::attach() {
 
   cdp_->call("Page.enable", {}, session_);
   cdp_->call("Runtime.enable", {}, session_);
+  // Like Playwright: the page believes it has focus and is active even when
+  // headless/hidden (Snapchat only reveals message bodies on a focused page).
+  try {
+    cdp_->call("Emulation.setFocusEmulationEnabled", {{"enabled", true}}, session_);
+    cdp_->call("Page.setWebLifecycleState", {{"state", "active"}}, session_);
+  } catch (const CdpError&) {
+  }
   cdp_->call("Emulation.setUserAgentOverride",
              {{"userAgent", user_agent()}, {"acceptLanguage", "en-US,en;q=0.9"}, {"platform", "Linux"}}, session_);
   try {
