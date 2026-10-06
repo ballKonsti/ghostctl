@@ -90,7 +90,6 @@ bool ConfirmModal::event(App& app, const Event& e) {
 // --- menu ---
 
 Element MenuModal::render(App& app) {
-  const auto& t = app.theme();
   clamp(sel, options.size());
   Elements rows;
   for (int i = 0; i < int(options.size()); ++i) {
