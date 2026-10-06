@@ -1,22 +1,37 @@
 # ghostctl
 
 A terminal client for Snapchat Web. ghostctl drives the real Snapchat Web page in
-a Playwright-controlled Chromium (invisible, headless) and puts a Textual TUI on
-top of it. It is meant for your own account, on your own machine.
+an invisible (headless) Chromium over the DevTools protocol and puts a TUI on top
+of it. It is meant for your own account, on your own machine.
 
-## Setup
+ghostctl is written in **C++** (`cpp/`). The original Python version (`src/`,
+Playwright + Textual) still works with `uv run ghostctl` and shares the same
+profile, config file and saved login.
 
-You need Python 3.12+ (textual-image requires it) and [uv](https://docs.astral.sh/uv/).
+## Setup (C++)
+
+Needs a C++23 compiler (GCC 13+ or Clang 17+), CMake, Ninja, and:
+nlohmann-json, toml++, libsecret, libwebp, zlib. FTXUI and stb are fetched by CMake.
+On Arch:
 
 ```sh
-cd snapchat_cli
-uv sync                              # creates .venv and installs dependencies
-uv run playwright install chromium   # downloads the Chromium build Playwright drives
-uv tool install --editable .         # puts `ghostctl` on your PATH (~/.local/bin)
+sudo pacman -S --needed base-devel cmake ninja nlohmann-json tomlplusplus libsecret libwebp zlib
 ```
 
-Optional: `mpv` (or any player) for video snaps, `ffmpeg` for video preview
-frames, `notify-send` for desktop notifications.
+Chromium: ghostctl uses Playwright's Chromium build if it's in `~/.cache/ms-playwright`
+(`uv run playwright install chromium`), otherwise `chromium`/`google-chrome` from
+your PATH, or `[browser] executable` in the config.
+
+```sh
+cd snapchat_cli/cpp
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+cmake --install build-release --prefix ~/.local --strip   # puts `ghostctl` in ~/.local/bin
+```
+
+Optional: `mpv` (or any player) for videos and voice notes, `ffmpeg` for video
+preview frames, `notify-send` for desktop notifications, and a colour emoji font
+(`noto-fonts-emoji`).
 
 ## Run
 
@@ -51,7 +66,8 @@ a browser window so you can finish there.
 ### Headless
 
 Snapchat refuses browsers whose user agent says "HeadlessChrome", so ghostctl
-sends the normal Chrome user agent of the installed Chromium. If Snapchat ever
+sends the normal Chrome user agent of the installed Chromium, and (like Playwright)
+tells the page it has focus, which Snapchat needs to show message bodies. If Snapchat ever
 refuses headless anyway, ghostctl falls back to a hidden window (forced onto
 X11, since Wayland compositors ignore off-screen placement) and says so.
 Set `[browser] headless` in the config to change this.
@@ -100,7 +116,7 @@ takes the first. In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play
 - **Emoji:** ghostctl handles every emoji (families, skin tones, flags…); your
   terminal needs a colour emoji font to draw them, e.g. `noto-fonts-emoji` on Arch.
 - **Saved status:** the page only reveals it in a message's menu. ghostctl shows
-  💾 once you've opened the menu (`e`) on a message.
+  ◆ saved once you've opened the menu (`e`) on a message.
 - **Typing:** while you write, ghostctl mirrors your draft into Snapchat's
   composer so friends see you typing (`send_typing = false` to disable). An
   incoming "typing" shows under the conversation when the page shows it.
@@ -112,16 +128,19 @@ takes the first. In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play
 ## Configuration
 
 `ghostctl config` writes `~/.config/ghostctl/config.toml` with every option and
-its default, commented. Highlights: theme (any Textual theme; `ctrl+p` previews
-them live), colours for you/others/unread, compact chat list, which badges to
-show, time format, notifications (bell, status line, desktop), action pacing,
-image protocol (`auto`, `kitty`, `sixel`, `iterm`, `halfblock`, `unicode`, `none`),
-video player, and every key binding.
+its default, commented. Highlights: theme (`ghost`, `nord`, `gruvbox`, `dracula`,
+`tokyo-night`, `catppuccin-mocha`, `monokai`), colours for you/others/unread,
+compact chat list, which badges to show, time format, notifications (bell, toast,
+desktop), action pacing, image protocol (`auto`, `kitty`, `halfblock`, `none`;
+`auto` uses kitty graphics in kitty, WezTerm and Ghostty), video player, and every
+key binding.
 
 ## When Snapchat changes its layout
 
-Every DOM selector is in `src/ghostctl/selectors.py`, each with a comment saying
-what it targets. If an error names a selector, run `ghostctl inspect`, go to the
+Every DOM selector is in `cpp/src/selectors.hpp` (and `src/ghostctl/selectors.py`
+for the Python version), each with a comment saying what it targets. The page
+script that reads chats and messages is `cpp/src/page.js` (a copy of the one in the
+Python bridge). If an error names a selector, run `ghostctl inspect`, go to the
 view that broke, type a label and press Enter. Each dump in `debug/<time>-<label>/`
 contains `aria.yaml`, `elements.json`, `page.html`, `screenshot.png` and `url.txt`.
 The first snap/story you open is also dumped to `~/.ghostctl/debug/` (turn off

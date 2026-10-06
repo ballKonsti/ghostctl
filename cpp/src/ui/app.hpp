@@ -52,7 +52,8 @@ class App {
  public:
   explicit App(Config cfg);
   ~App();
-  int run();
+  // connect=false: UI only (developer previews of modals).
+  int run(bool connect = true);
 
   // --- for modals and background tasks ---
   const Theme& theme() const { return theme_; }

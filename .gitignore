@@ -16,3 +16,4 @@ debug/
 # C++ build
 cpp/build/
 cpp/compile_commands.json
+cpp/build-release/

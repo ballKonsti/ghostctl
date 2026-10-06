@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <string>
 
@@ -18,6 +19,9 @@
 #include "inspect.hpp"
 #include "login.hpp"
 #include "ui/app.hpp"
+#include "ui/modals.hpp"
+#include <fstream>
+#include <sstream>
 #include "ui/wtext.hpp"
 #include "util.hpp"
 
@@ -190,6 +194,89 @@ int main(int argc, char** argv) {
       std::printf("visible after 1s: %s\n", b.eval("window.__gc.all('[data-ghostctl-target] > div').map(e => getComputedStyle(e).visibility)").dump().c_str());
       b.close();
       return 0;
+    }
+    if (cmd == "debug-voice") {  // developer check: find and download a voice note in a chat
+      Browser b(Config::load());
+      b.start();
+      std::mutex mu;
+      Conversation conv;
+      std::map<std::string, std::string> ids;  // name -> id
+      Bridge br(b, [&](BridgeEvent ev) {
+        std::lock_guard lk(mu);
+        if (ev.kind == BridgeEvent::Conv) conv = ev.conv;
+        if (ev.kind == BridgeEvent::Feed)
+          for (auto& c : ev.feed) ids[c.name] = c.id;
+      });
+      br.start();
+      for (int i = 0; i < 3; ++i) {
+        {
+          std::lock_guard lk(mu);
+          if (ids.count(opt)) break;
+        }
+        br.load_more_chats();
+        sleep_ms(1500);
+      }
+      std::string id;
+      {
+        std::lock_guard lk(mu);
+        id = ids.count(opt) ? ids[opt] : opt;
+      }
+      br.open_chat(id);
+      std::string key;
+      double dur = 0;
+      for (int i = 0; i < 6 && key.empty(); ++i) {
+        sleep_ms(1500);
+        {
+          std::lock_guard lk(mu);
+          for (auto& it : conv.items)
+            for (auto& m : it.msg.media)
+              if (m == "audio") key = it.msg.key, dur = it.msg.duration;
+        }
+        if (key.empty()) br.load_older();
+      }
+      std::printf("voice note: %s (%.1fs)\n", key.c_str(), dur);
+      if (!key.empty())
+        for (auto& m : br.message_media(key))
+          std::printf("media: %s %s %zu bytes -> %s\n", m.kind.c_str(), m.mime.c_str(), m.data.size(), m.suffix().c_str());
+      br.close_chat();
+      b.close();
+      return 0;
+    }
+    if (cmd == "debug-camera") {  // developer check: open the camera in a chat and inspect the shutter
+      Browser b(Config::load());
+      b.start();
+      Bridge br(b, [](BridgeEvent) {});
+      br.start();
+      br.open_chat(opt);
+      br.open_camera();
+      sleep_ms(1500);
+      std::string q = json(std::string(sel::CAMERA_SHUTTER.css)).dump();
+      std::printf("raw: %s\n", b.eval("document.querySelectorAll(" + q + ").length").dump().c_str());
+      std::printf("helper all: %s\n", b.eval("window.__gc.all(" + q + ").length").dump().c_str());
+      std::printf("buttons: %s\n", b.eval("[...document.querySelectorAll('#portal-container button')].slice(0, 8).map(e => (e.title || '-') + ':' + e.className.slice(0, 14) + ':' + (e.nextElementSibling ? e.nextElementSibling.tagName + '/' + (e.nextElementSibling.title || '') : 'none') + ':' + window.__gc.visible(e))").dump().c_str());
+      br.close_camera();
+      b.close();
+      return 0;
+    }
+    if (cmd == "debug-login") {  // developer preview of the login screen, no browser
+      ui::App app(Config::load());
+      app.push(std::make_shared<ui::LoginModal>(true, opt, [&app](std::optional<ui::LoginForm> f) {
+        app.notify(f ? "submitted " + f->user + " remember=" + (f->remember ? "yes" : "no") : "cancelled");
+      }));
+      return app.run(false);
+    }
+    if (cmd == "debug-viewer") {  // developer preview: show image files in the viewer, no browser
+      auto cfg = Config::load();
+      ui::App app(cfg);
+      std::vector<std::pair<Media, ViewerInfo>> items;
+      for (int i = 2; i < argc; ++i) {
+        std::ifstream f(argv[i], std::ios::binary);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        items.push_back({Media{"image", ss.str(), ""}, ViewerInfo{"Test", ""}});
+      }
+      app.push(std::make_shared<ui::ViewerModal>(items, "Photo", false));
+      return app.run(false);
     }
     if (cmd == "debug-emoji") {  // developer check of emoji search ranking
       for (int i = 2; i < argc; ++i) {

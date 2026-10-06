@@ -104,6 +104,14 @@
       const r = el.getBoundingClientRect();
       return {x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height};
     },
+    // Centre of the first match even if it looks invisible (e.g. a transparent
+    // ring drawn by its children/outline, like the camera shutter).
+    pointAny: (sel) => {
+      const el = all(sel).find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return {x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height};
+    },
     rect: (sel) => {
       const el = first(sel, true);
       if (!el) return null;

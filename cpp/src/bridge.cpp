@@ -589,9 +589,9 @@ void Bridge::wait_preview(double timeout_s) {
 void Bridge::capture_photo() {
   // The shutter only has onClick: a quick press/release on its centre takes a photo.
   std::lock_guard lk(lock_);
-  auto p = b_.point(sel::CAMERA_SHUTTER.css);
-  if (!p) throw SelectorError(sel::CAMERA_SHUTTER, "finding the shutter");
-  b_.click_at(p->x, p->y, "left", 150);
+  auto p = b_.helper("pointAny", {sel::CAMERA_SHUTTER.css});
+  if (!p.is_object()) throw SelectorError(sel::CAMERA_SHUTTER, "finding the shutter");
+  b_.click_at(p["x"], p["y"], "left", 150);
   wait_preview();
 }
 

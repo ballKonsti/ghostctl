@@ -187,11 +187,11 @@ std::string App::chat_name(const std::string& id) const {
 
 // --- main loop ---
 
-int App::run() {
+int App::run(bool connect_now) {
   screen_ = std::make_unique<ftxui::App>(ftxui::App::Fullscreen());
   auto root = CatchEvent(Renderer([this] { return render(); }), [this](Event e) { return on_event(e); });
   Loop loop(screen_.get(), root);
-  connect();
+  if (connect_now) connect();
   // Ticker: expire toasts and keep "5m ago" fresh.
   std::thread([this] {
     while (!quitting_) {
@@ -524,7 +524,7 @@ Element App::render_message(const Message& m, bool header, bool selected) {
       bool playing = playing_key_ == m.key;
       std::string len;
       if (m.duration > 0) {
-        char buf[16];
+        char buf[32];
         std::snprintf(buf, sizeof buf, " · %d:%02d", int(m.duration) / 60, int(m.duration) % 60);
         len = buf;
       }
