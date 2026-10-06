@@ -9,6 +9,7 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/loop.hpp>
 #include <ftxui/screen/string.hpp>
+#include <ftxui/screen/terminal.hpp>
 
 #include "creds.hpp"
 #include "emoji.hpp"
@@ -88,7 +89,9 @@ class AppLoginUI : public LoginUI {
 App::App(Config cfg)
     : cfg_(std::move(cfg)),
       theme_(theme_named(cfg_.str("ui", "theme"))),
-      protocol_(img::choose(cfg_.str("images", "protocol"))) {}
+      protocol_(img::choose(cfg_.str("images", "protocol"))) {
+  rounded_ = cfg_.flag("ui", "rounded_glyphs");
+}
 
 App::~App() = default;
 
@@ -175,9 +178,43 @@ Element App::dialog(Element body, int width) const {
          color(theme_.fg) | clear_under;
 }
 
+namespace {
+constexpr const char* CAP_L = "";  // Nerd Font left half-circle
+constexpr const char* CAP_R = "";  // Nerd Font right half-circle
+}  // namespace
+
+Element App::pill(const std::string& t, Color fg, Color bg, bool strong) const {
+  auto mid = wtext(rounded_ ? t : " " + t + " ") | color(fg) | bgcolor(bg);
+  if (strong) mid = mid | bold;
+  if (!rounded_) return mid;
+  return hbox({wtext(CAP_L) | color(bg), mid, wtext(CAP_R) | color(bg)});
+}
+
 Element App::hint(const std::string& k, const std::string& label) const {
-  return hbox({wtext(" " + k + " ") | bold | color(theme_.primary), wtext(label.empty() ? "" : label + " ") |
-                                                                        color(theme_.dim)});
+  if (k.empty()) return wtext("");
+  return hbox({pill(k, theme_.bg, theme_.primary, true),
+               wtext(label.empty() ? " " : " " + label + "  ") | color(theme_.dim)});
+}
+
+Element App::avatar(const std::string& name) const {
+  const Color palette[] = {theme_.red, theme_.blue, theme_.purple, theme_.green, theme_.primary, theme_.warn};
+  unsigned h = 2166136261u;
+  for (unsigned char c : name) h = (h ^ c) * 16777619u;
+  // First letter (or emoji) of the name, skipping leading symbols/spaces.
+  std::string initial = "?";
+  for (auto& c : clusters(name)) {
+    if (c.text == " ") continue;
+    initial = c.width == 2 ? c.text : upper_case(c.text);
+    break;
+  }
+  return pill(initial, theme_.bg, palette[h % 6], true);
+}
+
+Element App::row_select(Element row, bool selected, bool focused) const {
+  if (!selected) return hbox({wtext(" "), row | flex, wtext(" ")});
+  Color bg = focused ? theme_.boost : theme_.panel;
+  if (!rounded_) return hbox({wtext(" "), row | flex, wtext(" ")}) | bgcolor(bg);
+  return hbox({wtext(CAP_L) | color(bg), row | flex | bgcolor(bg), wtext(CAP_R) | color(bg)});
 }
 
 std::string App::chat_name(const std::string& id) const {
@@ -395,36 +432,30 @@ Element App::render() {
 }
 
 Element App::render_main() {
-  int width = std::max(24, int(cfg_.num("ui", "chat_list_width")));
+  int width = std::max(28, int(cfg_.num("ui", "chat_list_width")));
   Element right = open_id_.empty() ? render_empty() : render_conv();
-  return vbox({
-             render_topbar(),
-             hbox({render_chats() | size(WIDTH, EQUAL, width) | bgcolor(theme_.surface),
-                   separatorStyled(HEAVY) | color(theme_.panel), right | flex}) |
-                 flex,
-             wtext(" " + status_) | color(status_error_ ? theme_.red : theme_.dim) | bgcolor(theme_.surface),
-             render_footer(),
-         }) |
-         bgcolor(theme_.bg) | color(theme_.fg);
+  Elements rows = {
+      render_topbar(),
+      hbox({wtext(" "), render_chats() | size(WIDTH, EQUAL, width), wtext(" "), right | flex, wtext(" ")}) | flex,
+  };
+  if (!status_.empty())
+    rows.push_back(hbox({wtext(" "), pill(status_, status_error_ ? theme_.bg : theme_.fg,
+                                          status_error_ ? theme_.red : theme_.panel)}));
+  rows.push_back(render_footer());
+  return vbox(std::move(rows)) | bgcolor(theme_.bg) | color(theme_.fg);
 }
 
 Element App::render_topbar() {
   int unread = 0;
   for (auto& [id, c] : chats_) unread += c.unread();
   Elements right;
-  if (unread) right.push_back(wtext(" " + std::to_string(unread) + " new ") | bold | color(Color::Black) |
-                              bgcolor(theme_.red));
-  right.push_back(wtext("  "));
-  if (connected_) {
-    right.push_back(wtext("● ") | color(live_ ? theme_.green : theme_.primary));
-    right.push_back(wtext(live_ ? "live" : "polling") | color(theme_.dim));
-  } else {
-    right.push_back(wtext("◌ connecting") | color(theme_.dim));
-  }
-  if (!mode_note_.empty()) right.push_back(wtext("  ·  " + mode_note_) | color(theme_.dim));
-  right.push_back(wtext(" "));
-  return hbox({wtext(" 👻 "), wtext("ghostctl") | bold | color(theme_.primary), filler(), hbox(std::move(right))}) |
-         bgcolor(theme_.surface);
+  if (unread) right.push_back(pill(std::to_string(unread) + " new", theme_.bg, theme_.red, true)), right.push_back(wtext(" "));
+  if (connected_)
+    right.push_back(pill(live_ ? "● live" : "● polling", live_ ? theme_.green : theme_.primary, theme_.panel));
+  else
+    right.push_back(pill("◌ connecting", theme_.dim, theme_.panel));
+  if (!mode_note_.empty()) right.push_back(wtext("  " + mode_note_ + " ") | color(theme_.dim));
+  return hbox({wtext(" "), pill("👻 ghostctl", theme_.bg, theme_.primary, true), filler(), hbox(std::move(right))});
 }
 
 std::vector<const Chat*> App::visible_chats() const {
@@ -438,38 +469,47 @@ std::vector<const Chat*> App::visible_chats() const {
 
 Element App::render_chat_row(const Chat& c, bool selected) {
   auto st = status_style(c.status, theme_);
-  int width = std::max(24, int(cfg_.num("ui", "chat_list_width"))) - 2;
+  bool cards = cfg_.flag("ui", "card_rows");
+  int width = std::max(28, int(cfg_.num("ui", "chat_list_width"))) - (cards ? 6 : 4);
   std::string when = ago(c.time);
-  std::string name = fit(c.name, width - 4 - display_width(when));
-  auto line1 = hbox({wtext(" "), wtext(std::string(st.icon) + " ") | bold | color(st.color),
-                     wtext(name) | (c.unread() ? bold : nothing), filler(),
-                     wtext(when + " ") | (c.unread() ? bold | color(st.color) : color(theme_.dim))});
-  Element row;
+  std::string name = fit(c.name, width - 5 - display_width(when));
+  auto line1 = hbox({avatar(c.name), wtext(" "), wtext(name) | (c.unread() ? bold : nothing), filler(),
+                     wtext(when) | (c.unread() ? bold | color(st.color) : color(theme_.dim))});
   if (cfg_.flag("ui", "compact_chat_list")) {
-    row = line1;
-  } else {
-    Elements l2 = {wtext("   "), wtext(c.status.empty() ? " " : c.status) | (st.bold ? bold | color(st.color) : color(theme_.dim))};
-    if (!c.streak().empty() && cfg_.flag("ui", "show_streaks")) {
-      std::string s = c.streak();
-      s.erase(std::remove(s.begin(), s.end(), ' '), s.end());
-      l2.push_back(wtext("  " + s));
-    }
-    if (!c.badge.empty() && cfg_.flag("ui", "show_badges")) l2.push_back(wtext(" " + c.badge));
-    if (c.group && cfg_.flag("ui", "show_group_tag")) l2.push_back(wtext("  group") | color(theme_.dim));
-    row = vbox({line1, hbox(std::move(l2)), wtext("")});
+    auto row = row_select(line1, selected, focus_ == Focus::Chats);
+    return selected ? row | focus : row;
   }
-  if (selected) row = row | bgcolor(focus_ == Focus::Chats ? theme_.boost : theme_.panel) | focus;
-  return row;
+  Elements l2 = {wtext("    "), wtext(std::string(st.icon) + " ") | color(st.color),
+                 wtext(c.status.empty() ? " " : c.status) | (st.bold ? bold | color(st.color) : color(theme_.dim))};
+  if (!c.streak().empty() && cfg_.flag("ui", "show_streaks")) {
+    std::string sk = c.streak();
+    sk.erase(std::remove(sk.begin(), sk.end(), ' '), sk.end());
+    l2.push_back(wtext(" · ") | color(theme_.dim));
+    l2.push_back(wtext(sk));
+  }
+  if (!c.badge.empty() && cfg_.flag("ui", "show_badges")) l2.push_back(wtext(" " + c.badge));
+  if (c.group && cfg_.flag("ui", "show_group_tag")) l2.push_back(wtext(" · group") | color(theme_.dim));
+  auto body = vbox({line1, hbox(std::move(l2))});
+  Element row;
+  if (cards) {
+    // Every row reserves the border so the selected card doesn't shift the list.
+    Color border = selected ? (focus_ == Focus::Chats ? theme_.primary : theme_.dim) : theme_.bg;
+    row = (selected ? body | bgcolor(theme_.surface) : body) | borderStyled(selected ? ROUNDED : EMPTY, border);
+  } else {
+    row = vbox({row_select(body, selected, focus_ == Focus::Chats), wtext("")});
+  }
+  return selected ? row | focus : row;
 }
 
 Element App::render_chats() {
   int unread = 0;
   for (auto& [id, c] : chats_) unread += c.unread();
-  Elements head = {wtext(" Chats") | bold};
-  if (unread) head.push_back(wtext("  " + std::to_string(unread)) | bold | color(theme_.red));
-  Elements col = {hbox(std::move(head))};
+  Elements head = {wtext(" Chats ") | bold};
+  if (unread) head.push_back(pill(std::to_string(unread), theme_.bg, theme_.red, true));
+  head.push_back(wtext(" "));
+  Elements col;
   if (search_open_)
-    col.push_back(search_.render(focus_ == Focus::Search, theme_.fg, theme_.dim) |
+    col.push_back(hbox({wtext("⌕ ") | color(theme_.dim), search_.render(focus_ == Focus::Search, theme_.fg, theme_.dim) | flex}) |
                   borderStyled(ROUNDED, focus_ == Focus::Search ? theme_.primary : theme_.panel));
   Elements rows;
   auto list = visible_chats();
@@ -479,17 +519,23 @@ Element App::render_chats() {
   for (auto* c : list) rows.push_back(render_chat_row(*c, c->id == selected_chat_));
   if (rows.empty()) rows.push_back(wtext(connected_ ? "  no chats match" : "  loading…") | color(theme_.dim));
   col.push_back(vbox(std::move(rows)) | yframe | flex);
-  return vbox(std::move(col));
+  Color border = focus_ == Focus::Chats || focus_ == Focus::Search ? theme_.dim : theme_.panel;
+  // The colour applied to the window is the border's; title and rows get their own.
+  return window(hbox(std::move(head)) | color(theme_.fg), vbox(std::move(col)) | color(theme_.fg), ROUNDED) |
+         color(border) | bgcolor(theme_.bg);
 }
 
 Element App::render_empty() {
   Elements art;
   for (auto line : GHOST_ART) art.push_back(wtext(line) | color(theme_.primary));
-  return vbox({filler(), vbox(std::move(art)) | hcenter, wtext(""), wtext("Select a chat") | bold | hcenter,
-               hbox({hint("enter", "open"), hint(cfg_.keys("camera").empty() ? "" : cfg_.keys("camera")[0], "live snap"),
-                     hint("s", "stories"), hint("?", "keys")}) |
-                   hcenter,
-               filler()});
+  auto body = vbox({filler(), vbox(std::move(art)) | hcenter, wtext(""), wtext("Select a chat") | bold | hcenter,
+                    wtext(""),
+                    hbox({hint("enter", "open"), hint(key_label(cfg_.keys("camera").empty() ? "" : cfg_.keys("camera")[0]), "live snap"),
+                          hint("s", "stories"), hint("?", "keys")}) |
+                        hcenter,
+                    filler()}) |
+              color(theme_.fg);
+  return window(wtext(""), body, ROUNDED) | color(theme_.panel);
 }
 
 std::vector<const Message*> App::messages() const {
@@ -505,76 +551,106 @@ const Message* App::selected_message() const { return conv_ ? conv_->find(select
 Element App::render_message(const Message& m, bool header, bool selected) {
   Color who = parse_color(m.mine() ? cfg_.str("ui", "me_color") : cfg_.str("ui", "them_color"),
                           m.mine() ? theme_.blue : theme_.red);
-  Elements parts;
-  if (header) {
-    std::string name = m.sender.empty() ? "?" : m.sender;
-    std::string upper = upper_case(name);
-    parts.push_back(hbox({wtext(upper) | bold | color(who),
-                          wtext("  " + local_time(m.time, cfg_.str("ui", "time_format"))) | color(theme_.dim)}));
-  }
+  bool bubbles = cfg_.flag("ui", "bubbles");
+  bool right = bubbles && m.mine();
+  bool active = selected && focus_ == Focus::Conv;
+
+  // Body lines, and how wide they want to be (for the bubble width).
   Elements body;
+  int want = 4;
+  auto line = [&](Element e, int w) {
+    body.push_back(std::move(e));
+    want = std::max(want, w);
+  };
   if (!m.quote_text.empty()) {
-    body.push_back(wtext("╭ " + m.quote_sender) | color(theme_.dim));
-    body.push_back(hbox({wtext("│ ") | color(theme_.dim), wparagraph(m.quote_text) | italic | color(theme_.dim)}));
+    line(hbox({wtext("╭ ") | color(theme_.dim), wtext(m.quote_sender) | bold | color(theme_.dim)}), 2 + display_width(m.quote_sender));
+    line(hbox({wtext("│ ") | color(theme_.dim), wparagraph(m.quote_text) | italic | color(theme_.dim)}),
+         2 + display_width(m.quote_text));
   }
   if (!m.text.empty())
-    for (auto& line : split_lines(m.text)) body.push_back(wparagraph(line.empty() ? " " : line));
+    for (auto& l : split_lines(m.text)) line(wparagraph(l.empty() ? " " : l), display_width(l));
   for (auto& kind : m.media) {
     if (kind == "audio") {
       bool playing = playing_key_ == m.key;
       std::string len;
       if (m.duration > 0) {
         char buf[32];
-        std::snprintf(buf, sizeof buf, " · %d:%02d", int(m.duration) / 60, int(m.duration) % 60);
+        std::snprintf(buf, sizeof buf, " %d:%02d", int(m.duration) / 60, int(m.duration) % 60);
         len = buf;
       }
-      body.push_back(hbox({wtext(playing ? "■ " : "▶ ") | bold | color(theme_.purple),
-                           wtext("Voice note" + len) | bold | color(theme_.purple),
-                           wtext("   ▁▂▅▇▅▃▂▁▃▅▂") | color(playing ? theme_.purple : theme_.dim),
-                           wtext(playing ? "   o to stop" : "   o to play") | color(theme_.dim)}));
+      line(hbox({pill(playing ? "■" : "▶", theme_.bg, theme_.purple, true), wtext(" "),
+                 wtext("▁▂▅▇▅▃▂▁▃▅▂▁▂▅") | color(playing ? theme_.purple : theme_.dim),
+                 wtext(len) | bold | color(theme_.purple)}),
+           22);
+      line(wtext(playing ? "Voice note · o to stop" : "Voice note · o to play") | color(theme_.dim), 22);
       continue;
     }
     Color c = kind == "video" ? theme_.purple : theme_.blue;
-    body.push_back(hbox({wtext("▣ ") | bold | color(c), wtext(kind == "video" ? "Video" : "Photo") | bold | color(c),
-                         wtext("   o to view") | color(theme_.dim)}));
+    line(hbox({pill(kind == "video" ? "▶ Video" : "▣ Photo", theme_.bg, c, true), wtext("  o to view") | color(theme_.dim)}),
+         22);
   }
   if (m.snap_new) {
-    body.push_back(hbox({wtext("■ ") | bold | color(theme_.red),
-                         wtext(m.snap_status.empty() ? "New Snap" : m.snap_status) | bold | color(theme_.red),
-                         wtext("   o to open") | color(theme_.dim)}));
+    line(hbox({pill("■ " + (m.snap_status.empty() ? std::string("New Snap") : m.snap_status), theme_.bg, theme_.red, true),
+               wtext("  o to open") | color(theme_.dim)}),
+         24);
   } else if (!m.snap_status.empty()) {
     auto st = status_style(m.snap_status, theme_);
-    body.push_back(hbox({wtext(std::string(st.icon) + " ") | bold | color(st.color), wtext(m.snap_status) | color(st.color)}));
+    line(hbox({wtext(std::string(st.icon) + " ") | bold | color(st.color), wtext("Snap · " + m.snap_status) | color(st.color)}),
+         10 + display_width(m.snap_status));
   }
-  if (m.not_supported) body.push_back(wtext("◇ Not supported on web — check your phone") | color(theme_.dim));
-  if (body.empty()) body.push_back(wtext("▣ Media") | bold | color(theme_.blue));
-  if (saved_.count(m.key) && saved_[m.key]) body.push_back(wtext("◆ saved") | bold | color(theme_.dim));
-  parts.push_back(hbox({separatorCharacter("▎") | color(who), wtext(" "), vbox(std::move(body)) | flex}));
+  if (m.not_supported) line(wtext("◇ Not supported on web — check your phone") | color(theme_.dim), 40);
+  if (body.empty()) line(wtext("▣ Media") | bold | color(theme_.blue), 8);
+
+  Elements parts;
+  std::string when = local_time(m.time, cfg_.str("ui", "time_format"));
+  bool saved = saved_.count(m.key) && saved_.at(m.key);
+  if (header) {
+    auto h = hbox({wtext(upper_case(m.sender.empty() ? "?" : m.sender)) | bold | color(who),
+                   wtext("  " + when) | color(theme_.dim), wtext(saved ? "  ◆ saved" : "") | color(theme_.dim)});
+    parts.push_back(right ? hbox({filler(), h, wtext(" ")}) : hbox({wtext(" "), h}));
+  }
+
+  Element content = vbox(std::move(body));
+  if (bubbles) {
+    int w = std::clamp(want, 4, bubble_max_);
+    Color border = active ? theme_.primary : selected ? theme_.dim : who;
+    // Colour only the inside, so the rounded corners stay round.
+    auto bubble = (content | size(WIDTH, EQUAL, w) | bgcolor(active ? theme_.boost : theme_.bg)) |
+                  borderStyled(ROUNDED, border);
+    parts.push_back(right ? hbox({filler(), bubble}) : hbox({bubble, filler()}));
+  } else {
+    auto bar = hbox({separatorCharacter("▎") | color(who), wtext(" "), content | flex});
+    parts.push_back(active ? bar | bgcolor(theme_.boost) : bar);
+  }
   if (!m.reactions.empty() && cfg_.flag("ui", "show_reactions")) {
-    std::string r;
-    for (auto& x : m.reactions) r += (r.empty() ? "" : "   ") + reaction_label(x);
-    parts.push_back(wtext("  " + r) | color(theme_.dim));
+    Elements rs;
+    for (auto& x : m.reactions) rs.push_back(pill(reaction_label(x), theme_.fg, theme_.panel)), rs.push_back(wtext(" "));
+    parts.push_back(right ? hbox({filler(), hbox(std::move(rs))}) : hbox({wtext(" "), hbox(std::move(rs))}));
   }
   auto el = vbox(std::move(parts));
-  if (selected) el = el | bgcolor(focus_ == Focus::Conv ? theme_.boost : theme_.surface) | focus;
-  return el;
+  return selected ? el | focus : el;
 }
 
 Element App::render_conv() {
   const Chat* chat = chats_.count(open_id_) ? &chats_.at(open_id_) : nullptr;
-  // Header: name, then group · streak · status.
-  Elements sub;
+  // Bubbles use up to ~3/4 of the conversation width.
+  int pane = Terminal::Size().dimx - std::max(28, int(cfg_.num("ui", "chat_list_width"))) - 8;
+  bubble_max_ = std::max(16, pane * 3 / 4);
+
+  // Title: avatar, name, then group · streak · status.
+  Elements title = {wtext(" ")};
   if (chat) {
     auto st = status_style(chat->status, theme_);
-    if (chat->group) sub.push_back(wtext("group  ·  ") | color(theme_.dim));
-    if (!chat->streak().empty()) sub.push_back(wtext(chat->streak() + "  ·  "));
-    sub.push_back(wtext(std::string(st.icon) + " " + chat->status) | color(st.color));
+    title.push_back(avatar(chat->name));
+    title.push_back(wtext(" " + chat->name + " ") | bold | color(theme_.fg));
+    if (!chat->badge.empty()) title.push_back(wtext(chat->badge + " "));
+    title.push_back(wtext(" " + std::string(st.icon) + " " + chat->status) | color(st.color));
+    if (!chat->streak().empty()) title.push_back(wtext("  " + chat->streak()) | color(theme_.fg));
+    if (chat->group) title.push_back(wtext("  · group") | color(theme_.dim));
+    title.push_back(wtext(" "));
   }
-  auto head = vbox({hbox({wtext(chat ? chat->name : "") | bold, wtext(chat && !chat->badge.empty() ? "  " + chat->badge : "")}),
-                    hbox(std::move(sub))}) |
-              borderStyled(EMPTY);
 
-  Elements items;
+  Elements items = {wtext("")};
   const Message* prev = nullptr;
   bool show_dates = cfg_.flag("ui", "show_date_separators");
   if (conv_) {
@@ -582,11 +658,12 @@ Element App::render_conv() {
       if (it.kind == ConvItem::Date) {
         if (show_dates) {
           items.push_back(wtext(""));
-          items.push_back(wtext("─────  " + it.label + "  ─────") | color(theme_.dim) | hcenter);
+          items.push_back(pill(it.label, theme_.dim, theme_.panel) | hcenter);
+          items.push_back(wtext(""));
         }
         prev = nullptr;
       } else if (it.kind == ConvItem::Notice) {
-        items.push_back(wtext(it.label) | italic | color(theme_.dim) | hcenter);
+        items.push_back(pill(it.label, theme_.dim, theme_.surface) | italic | hcenter);
         prev = nullptr;
       } else {
         bool header = !prev || prev->sender != it.msg.sender || prev->time != it.msg.time;
@@ -600,55 +677,63 @@ Element App::render_conv() {
   }
   for (auto& p : pending_) {
     if (p.chat_id != open_id_) continue;
-    Elements b = {wparagraph(p.text)};
-    b.push_back(p.failed.empty() ? wtext("◌ sending…") | italic | color(theme_.dim)
-                                 : wtext("✗ not sent: " + p.failed) | bold | color(theme_.red));
-    items.push_back(hbox({separatorCharacter("▎") | color(theme_.dim), wtext(" "), vbox(std::move(b)) | flex}));
+    auto status = p.failed.empty() ? wtext("◌ sending…") | italic | color(theme_.dim)
+                                   : wtext("✗ not sent: " + p.failed) | bold | color(theme_.red);
+    int w = std::clamp(std::max(display_width(p.text), 12), 4, bubble_max_);
+    auto bubble = vbox({wparagraph(p.text) | color(theme_.dim), status}) | size(WIDTH, EQUAL, w) |
+                  borderStyled(ROUNDED, p.failed.empty() ? theme_.panel : theme_.red);
+    items.push_back(cfg_.flag("ui", "bubbles") ? hbox({filler(), bubble}) : bubble);
   }
+  items.push_back(wtext(""));
 
   Elements act;
   if (conv_ && conv_->typing) {
-    act.push_back(wtext("✎ ") | bold | color(theme_.primary));
-    act.push_back(wtext(conv_->activity.empty() ? "typing…" : conv_->activity) | color(theme_.primary));
+    act.push_back(pill("✎ " + (conv_->activity.empty() ? std::string("typing…") : conv_->activity), theme_.bg,
+                       theme_.primary, true));
   } else if (conv_ && !conv_->activity.empty()) {
-    act.push_back(wtext(conv_->activity));
+    act.push_back(wtext(conv_->activity) | color(theme_.dim));
   }
   if (conv_ && !conv_->seen_by.empty()) {
     std::string who;
     for (auto& s : conv_->seen_by) who += (who.empty() ? "" : ", ") + s;
-    act.push_back(wtext("   seen by ") | color(theme_.dim));
+    act.push_back(wtext("  👀 seen by ") | color(theme_.dim));
     act.push_back(wtext(who));
   }
 
-  Elements col = {head, separatorStyled(LIGHT) | color(theme_.panel),
-                  vbox(std::move(items)) | yframe | flex, hbox(std::move(act))};
+  Elements col = {vbox(std::move(items)) | yframe | flex, hbox({wtext(" "), hbox(std::move(act))})};
   if (!suggestions_.empty()) {
-    Elements s = {wtext(" tab ") | bold | color(theme_.primary)};
+    Elements sg = {wtext(" "), pill("tab", theme_.bg, theme_.primary, true), wtext(" ")};
     for (size_t i = 0; i < suggestions_.size(); ++i) {
-      s.push_back(wtext(" " + suggestions_[i].first + " "));
-      if (i == 0) s.push_back(wtext(suggestions_[i].second + " ") | color(theme_.dim));
+      sg.push_back(i == 0 ? pill(suggestions_[i].first + " " + suggestions_[i].second, theme_.fg, theme_.boost)
+                          : wtext(" " + suggestions_[i].first));
+      sg.push_back(wtext(" "));
     }
-    col.push_back(hbox(std::move(s)));
+    col.push_back(hbox(std::move(sg)));
   }
   bool typing = focus_ == Focus::Compose;
-  std::string ph = reply_key_ ? "Reply…" : typing ? "Send a chat   (/send ~/pic.jpg · :fire + tab · ctrl+e emoji)" : "Send a chat";
-  compose_.placeholder = ph;
-  col.push_back(compose_.render(typing, theme_.fg, theme_.dim) |
-                borderStyled(ROUNDED, typing ? theme_.primary : theme_.panel));
-  return vbox(std::move(col));
+  compose_.placeholder = reply_key_ ? "Reply…"
+                         : typing   ? "Send a chat   (/send ~/pic.jpg · :fire + tab · ctrl+e emoji)"
+                                    : "Send a chat";
+  auto composer = hbox({wtext(reply_key_ ? " ↩ " : " ") | color(theme_.primary),
+                        compose_.render(typing, theme_.fg, theme_.dim) | flex,
+                        wtext(typing && !compose_.empty() ? " ➤ " : "   ") | bold | color(theme_.primary)}) |
+                  borderStyled(ROUNDED, typing ? theme_.primary : theme_.panel);
+  col.push_back(composer);
+  Color border = focus_ == Focus::Conv || focus_ == Focus::Compose ? theme_.dim : theme_.panel;
+  return window(hbox(std::move(title)), vbox(std::move(col)) | color(theme_.fg), ROUNDED) | color(border);
 }
 
 Element App::render_footer() {
   static const std::pair<const char*, const char*> shown[] = {
       {"compose", "chat"}, {"camera", "snap"}, {"reply", "reply"}, {"menu", "react"},     {"open_media", "open"},
       {"send_file", "photo"}, {"emoji", "emoji"}, {"search", "search"}, {"help", "keys"}, {"quit", "quit"}};
-  Elements f;
+  Elements f = {wtext(" ")};
   for (auto [action, label] : shown) {
     auto ks = cfg_.keys(action);
     if (ks.empty()) continue;
     f.push_back(hint(key_label(ks[0]), label));
   }
-  return hbox(std::move(f)) | bgcolor(theme_.surface);
+  return hbox(std::move(f));
 }
 
 // --- events ---

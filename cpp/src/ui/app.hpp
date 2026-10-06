@@ -76,6 +76,13 @@ class App {
 
   ftxui::Element dialog(ftxui::Element body, int width = 76) const;
   ftxui::Element hint(const std::string& key, const std::string& label) const;
+  // Rounded badge: text between half-circle caps (Nerd Font) or plain padding.
+  ftxui::Element pill(const std::string& text, ftxui::Color fg, ftxui::Color bg, bool bold = false) const;
+  // Round badge with the first letter of a name, coloured per name.
+  ftxui::Element avatar(const std::string& name) const;
+  // A list row; selected rows get a rounded highlight.
+  ftxui::Element row_select(ftxui::Element row, bool selected, bool focused = true) const;
+  bool rounded() const { return rounded_; }
   std::string chat_name(const std::string& id) const;
   std::string open_id() const { return open_id_; }
 
@@ -132,6 +139,8 @@ class App {
 
   Config cfg_;
   Theme theme_;
+  bool rounded_ = true;  // Nerd Font half-circle caps available
+  int bubble_max_ = 60;  // widest chat bubble, set per frame
   img::Protocol protocol_;
   std::unique_ptr<ftxui::App> screen_;
   std::unique_ptr<Browser> browser_;

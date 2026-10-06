@@ -48,7 +48,8 @@ Element HelpModal::render(App& app) {
   for (auto [action, desc] : rows) {
     std::string keys;
     for (auto& k : app.cfg().keys(action)) keys += (keys.empty() ? "" : " ") + key_label(k);
-    lines.push_back(hbox({wtext("  " + keys) | bold | color(t.primary) | size(WIDTH, EQUAL, 14), wtext(desc)}));
+    lines.push_back(hbox({wtext("  "), app.pill(keys, t.bg, t.primary, true), filler()} ) | size(WIDTH, EQUAL, 16));
+    lines.back() = hbox({lines.back(), wtext(desc)});
   }
   lines.push_back(wtext(""));
   lines.push_back(hbox({wtext("  Snap viewer  ") | bold, wtext("n next · 1-8 react · p play video · esc close") |
@@ -93,8 +94,8 @@ Element MenuModal::render(App& app) {
   clamp(sel, options.size());
   Elements rows;
   for (int i = 0; i < int(options.size()); ++i) {
-    auto row = hbox({wtext(i == sel ? " ▸ " : "   ") | color(t.primary), options[i].label, filler()});
-    rows.push_back(i == sel ? row | bgcolor(t.boost) | focus : row);
+    auto row = app.row_select(hbox({wtext(" "), options[i].label, filler()}), i == sel);
+    rows.push_back(i == sel ? row | focus : row);
   }
   return app.dialog(vbox({title, wtext(""), vbox(std::move(rows)) | yframe | size(HEIGHT, LESS_THAN, 20)}), 60);
 }
@@ -223,9 +224,9 @@ Element EmojiModal::render(App& app) {
   Elements rows;
   if (query.empty()) rows.push_back(wtext(" recent") | bold | color(t.dim));
   for (int i = 0; i < int(results.size()); ++i) {
-    auto row = hbox({wtext(i == sel ? " ▸ " : "   ") | color(t.primary), wtext(results[i].first),
-                     wtext("  " + results[i].second) | color(t.dim), filler()});
-    rows.push_back(i == sel ? row | bgcolor(t.boost) | focus : row);
+    auto row = app.row_select(hbox({wtext(" " + results[i].first), wtext("  " + results[i].second) | color(t.dim), filler()}),
+                              i == sel);
+    rows.push_back(i == sel ? row | focus : row);
   }
   return app.dialog(vbox({hbox({wtext("Emoji  ") | bold | color(t.primary), wtext("type to search · enter insert") |
                                                                              color(t.dim)}),
@@ -290,10 +291,12 @@ Element FilePickerModal::render(App& app) {
     std::string label = i == 0 ? "../" : entries[i - 1].path().filename().string() + (entries[i - 1].is_directory() ? "/" : "");
     bool image = i > 0 && !entries[i - 1].is_directory() &&
                  std::set<std::string>{".png", ".jpg", ".jpeg", ".gif"}.count(lower(entries[i - 1].path().extension().string()));
-    auto row = hbox({wtext(i == sel && !typing ? " ▸ " : "   ") | color(t.primary),
-                     wtext(label) | color(i == 0 || entries[i - 1].is_directory() ? t.blue : image ? t.fg : t.dim),
-                     filler()});
-    rows.push_back(i == sel && !typing ? row | bgcolor(t.boost) | focus : row);
+    bool dir = i == 0 || entries[i - 1].is_directory();
+    const char* icon = app.rounded() ? (dir ? " 󰉋 " : image ? " 󰋩 " : "   ") : (dir ? " ▸ " : "   ");
+    auto row = app.row_select(hbox({wtext(icon) | color(dir ? t.blue : t.primary),
+                                    wtext(label) | color(dir ? t.blue : image ? t.fg : t.dim), filler()}),
+                              i == sel && !typing);
+    rows.push_back(i == sel && !typing ? row | focus : row);
   }
   return app.dialog(vbox({hbox({wtext("Send a photo  ") | bold | color(t.primary), wtext("png · jpeg · gif") | color(t.dim)}),
                           path.render(typing, t.fg, t.dim) | borderStyled(ROUNDED, typing ? t.primary : t.panel),
@@ -382,8 +385,8 @@ Element ViewerModal::render(App& app) {
   auto& [m, info] = items[std::min(index, items.size() - 1)];
   bool snap = kind == "Snap" || kind == "Story";
   Color c = m.kind == "video" ? t.purple : snap ? t.red : t.blue;
-  Elements top = {wtext(snap ? " ■ " : " ▣ ") | bold | color(c), wtext(kind) | bold | color(c)};
-  if (!info.sender.empty()) top.push_back(wtext("  " + info.sender) | bold);
+  Elements top = {wtext(" "), app.pill(std::string(snap ? "■ " : "▣ ") + kind, Color::Black, c, true)};
+  if (!info.sender.empty()) top.push_back(hbox({wtext("  "), app.avatar(info.sender), wtext(" " + info.sender) | bold}));
   if (!info.time.empty()) top.push_back(wtext("  · " + ago(parse_iso(info.time)) + " ago") | color(t.dim));
   if (items.size() > 1 || viewer) top.push_back(wtext("   " + std::to_string(index + 1)) | color(t.dim));
   if (busy) top.push_back(wtext("   ◌ loading…") | color(t.dim));
@@ -402,16 +405,16 @@ Element ViewerModal::render(App& app) {
   Elements bottom = {wtext(" ")};
   if (viewer) {
     for (int i = 0; i < 8; ++i) {
-      bottom.push_back(wtext(std::to_string(i + 1)) | bold | color(t.primary));
-      bottom.push_back(wtext(std::string(" ") + reaction_emoji(REACTION_ORDER[i]) + "  "));
+      bottom.push_back(app.pill(std::to_string(i + 1) + " " + reaction_emoji(REACTION_ORDER[i]), t.fg, t.panel));
+      bottom.push_back(wtext(" "));
     }
   }
   bottom.push_back(app.hint("n", "next"));
   if (m.kind == "video") bottom.push_back(app.hint("p", "play"));
   bottom.push_back(app.hint("esc", "close"));
   bottom.push_back(wtext("   " + path.filename().string()) | color(t.dim));
-  return vbox({hbox(std::move(top)), wtext(""), pic | flex | reflect(image_box), hbox(std::move(bottom))}) |
-         bgcolor(Color::Black);
+  auto frame = (pic | flex | reflect(image_box)) | borderStyled(ROUNDED, c);
+  return vbox({hbox(std::move(top)), frame | flex, hbox(std::move(bottom))}) | bgcolor(Color::Black);
 }
 
 void ViewerModal::close(App& app) {
@@ -488,12 +491,14 @@ Element SendToModal::render(App& app) {
     auto* r = list[i];
     if (r->section != section && filter.empty()) {
       section = r->section;
-      lines.push_back(wtext(" " + section) | bold | color(t.dim));
+      lines.push_back(hbox({wtext(" "), app.pill(section, t.dim, t.panel)}));
     }
     bool on = chosen.count(r->idx);
-    auto row = hbox({wtext(on ? " ● " : " ○ ") | bold | color(on ? t.blue : t.dim), wtext(r->name) | (on ? bold : nothing),
-                     wtext("  " + r->extra) | color(t.dim), filler()});
-    lines.push_back(i == sel && !typing ? row | bgcolor(t.boost) | focus : row);
+    auto row = app.row_select(hbox({wtext(on ? " ● " : " ○ ") | bold | color(on ? t.blue : t.dim), app.avatar(r->name),
+                                    wtext(" " + r->name) | (on ? bold : nothing), wtext("  " + r->extra) | color(t.dim),
+                                    filler()}),
+                              i == sel && !typing);
+    lines.push_back(i == sel && !typing ? row | focus : row);
   }
   std::string names;
   for (auto& r : rows)
@@ -586,14 +591,15 @@ Element CameraModal::render(App& app) {
   const auto& t = app.theme();
   Elements top;
   switch (state) {
-    case State::Preview: top.push_back(wtext(" ■ Snap ready ") | bold | color(Color::Black) | bgcolor(t.primary)); break;
-    case State::Live: top.push_back(wtext(" ● LIVE ") | bold | color(Color::White) | bgcolor(t.red)); break;
-    case State::Starting: top.push_back(wtext(" ◌ starting camera… ") | color(t.dim)); break;
-    case State::Capturing: top.push_back(wtext(" ◌ capturing… ") | color(t.dim)); break;
-    case State::Sending: top.push_back(wtext(" ◌ sending… ") | color(t.dim)); break;
-    case State::Closing: top.push_back(wtext(" ◌ closing… ") | color(t.dim)); break;
+    case State::Preview: top.push_back(app.pill("■ Snap ready", Color::Black, t.primary, true)); break;
+    case State::Live: top.push_back(app.pill("● LIVE", Color::White, t.red, true)); break;
+    case State::Starting: top.push_back(app.pill("◌ starting camera…", t.dim, t.panel)); break;
+    case State::Capturing: top.push_back(app.pill("◌ capturing…", t.dim, t.panel)); break;
+    case State::Sending: top.push_back(app.pill("◌ sending…", t.dim, t.panel)); break;
+    case State::Closing: top.push_back(app.pill("◌ closing…", t.dim, t.panel)); break;
   }
-  top.push_back(wtext("  to " + chat) | bold);
+  top.insert(top.begin(), wtext(" "));
+  top.push_back(hbox({wtext("  to  "), app.avatar(chat), wtext(" " + chat) | bold}));
 
   Element pic = filler();
   int bw = image_box.x_max - image_box.x_min + 1, bh = image_box.y_max - image_box.y_min + 1;
@@ -613,7 +619,8 @@ Element CameraModal::render(App& app) {
   } else {
     bottom.push_back(app.hint("esc", "close"));
   }
-  Elements body = {hbox(std::move(top)), wtext(""), pic | flex | reflect(image_box)};
+  Color frame_c = state == State::Live ? t.red : state == State::Preview ? t.primary : t.panel;
+  Elements body = {hbox(std::move(top)), (pic | flex | reflect(image_box)) | borderStyled(ROUNDED, frame_c) | flex};
   if (state == State::Preview)
     body.push_back(caption.render(true, t.fg, t.dim) | borderStyled(ROUNDED, t.primary));
   body.push_back(hbox(std::move(bottom)));

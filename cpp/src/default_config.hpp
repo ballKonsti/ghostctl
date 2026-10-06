@@ -24,6 +24,13 @@ theme = "ghost"
 chat_list_width = 38
 # One line per chat instead of two.
 compact_chat_list = false
+# Rounded pill ends () need a Nerd Font (e.g. JetBrains Mono Nerd Font).
+# Set to false if you see boxes or odd symbols at the ends of badges.
+rounded_glyphs = true
+# Messages as rounded bubbles (yours on the right). false: compact bars.
+bubbles = true
+# Chats as rounded cards (the selected one outlined). false: plain rows.
+card_rows = true
 show_streaks = true
 show_badges = true
 show_group_tag = true

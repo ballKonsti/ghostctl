@@ -129,7 +129,9 @@ takes the first. In the snap viewer: `n`/`space` next, `1`–`8` react, `p` play
 
 `ghostctl config` writes `~/.config/ghostctl/config.toml` with every option and
 its default, commented. Highlights: theme (`ghost`, `nord`, `gruvbox`, `dracula`,
-`tokyo-night`, `catppuccin-mocha`, `monokai`), colours for you/others/unread,
+`tokyo-night`, `catppuccin-mocha`, `monokai`), rounded pills (`rounded_glyphs`,
+needs a Nerd Font), chat bubbles (`bubbles`) and card rows (`card_rows`),
+colours for you/others/unread,
 compact chat list, which badges to show, time format, notifications (bell, toast,
 desktop), action pacing, image protocol (`auto`, `kitty`, `halfblock`, `none`;
 `auto` uses kitty graphics in kitty, WezTerm and Ghostty), video player, and every
